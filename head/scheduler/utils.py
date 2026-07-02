@@ -462,19 +462,45 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 co_scheduled_models=co_scheduled
             )
             
+            # 다음 상태(Next State) 산출 리팩토링
             with gcs_state.queue_lock:
                 cnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") == "CNN")
                 lstm_rnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") in ["LSTM", "RNN"])
-            t_profile_next = 0 if cnn_count > lstm_rnn_count else 1
+                q_len_next = len(gcs_state.task_queue)
+            if q_len_next == 0:
+                w_mix_next = 0
+            elif cnn_count > 0 and lstm_rnn_count == 0:
+                w_mix_next = 1
+            elif lstm_rnn_count > 0 and cnn_count == 0:
+                w_mix_next = 2
+            else:
+                w_mix_next = 3
                 
             with gcs_state.registry_lock:
                 w1_idle = 1 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
                 w2_idle = 1 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-            w_active_next = (w1_idle * 1) + (w2_idle * 2)
-                
-            p_spot_next = 1 if (time.time() % 30.0) < 10.0 else 0
-            budget_level_next = 0 if gcs_state.virtual_budget < 0.2 else (1 if gcs_state.virtual_budget < 0.7 else 2)
-            next_state = (t_profile_next, w_active_next, p_spot_next, budget_level_next)
+                w3_idle = 1 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
+            a_mix_next = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
+            
+            u_sla_next = 0
+            peek_task_next = None
+            with gcs_state.queue_lock:
+                for t in gcs_state.task_queue:
+                    deps_met = True
+                    for dep in t.get("dependencies", []):
+                        if not gcs_state.completed_tasks_cache.get(dep, False):
+                            deps_met = False
+                            break
+                    if deps_met:
+                        peek_task_next = t
+                        break
+            if peek_task_next:
+                time_left_next = peek_task_next["deadline"] - time.time()
+                if time_left_next <= 30.0:
+                    u_sla_next = 1
+                    
+            b_avail_next = 0 if gcs_state.virtual_budget < 0.7 else 1
+            next_state = (w_mix_next, a_mix_next, u_sla_next, b_avail_next)
             
             agent.update_q_value(state, action, reward, next_state)
             agent.save_q_table()

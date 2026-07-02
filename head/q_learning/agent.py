@@ -72,10 +72,10 @@ class QLearningAgent:
         self.COST_WEIGHT = 2.0
         self.DELAY_PENALTY_WEIGHT = 5.0
 
-        # 행동 정의 (Action Space) - Spot-B(Action 2) 제거에 따른 4개 액션 최적화
-        # 0: ASSIGN_OD (On-demand 배정), 1: ASSIGN_SPOT (Spot-A 배정)
-        # 2: HOLD (대기열 지연 보류), 3: SCALE_OUT (Spot 추가 동적 증설)
-        self.actions = [0, 1, 2, 3]
+        # 행동 정의 (Action Space) - 6대 행동 확장
+        # 0: ASSIGN_OD (On-demand 배정), 1: ASSIGN_SPOT_A (Spot-A 배정), 2: ASSIGN_SPOT_B (Spot-B 배정)
+        # 3: HOLD (대기열 지연 보류), 4: SCALE_OUT_SPOT_A (Spot-A 증설), 5: SCALE_OUT_SPOT_B (Spot-B 증설)
+        self.actions = [0, 1, 2, 3, 4, 5]
         
         # Q-테이블 자동 로드
         self.load_q_table()

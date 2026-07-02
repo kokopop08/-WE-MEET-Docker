@@ -11,8 +11,8 @@ import head.dashboard.server as dashboard
 def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, run_task_on_worker, get_next_runnable_task, get_current_spot_scale):
     """
     Q-Learning 스케줄러의 1주기 의사결정 및 연산 할당 작업을 수행합니다.
-    - 비용 및 SLA 저울질 행동 결정
-    - 예산 부족 시 Action Masking 자동 가드
+    - 4차원 상태 공간 (w_mix, a_mix, u_sla, b_avail) 기반 6대 행동 스케줄링
+    - 예산 고갈 시 Action Masking 안전 가드
     """
     spot_scale = get_current_spot_scale()
     
@@ -31,10 +31,21 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         empty_queue_duration = 0.0
         
     if empty_queue_duration >= 10.0 and spot_scale > 0:
-        dashboard.log_event("[Q-Learning Scale-In] 무부하 10초 유지로 인한 Spot 노드 안전 회수")
-        if cluster_manager.scale_in_specific_worker("spot_a"):
-            spot_scale -= 1
-            empty_queue_duration = 0.0
+        # 비용 효율을 위해 가동 비용이 비싼 spot_a를 우선 회수하고 없으면 spot_b를 회수합니다.
+        with gcs_state.registry_lock:
+            has_spot_a = any(info["node_type"] == "spot_a" for info in gcs_state.worker_registry.values())
+            has_spot_b = any(info["node_type"] == "spot_b" for info in gcs_state.worker_registry.values())
+        
+        if has_spot_a:
+            if cluster_manager.scale_in_specific_worker("spot_a"):
+                dashboard.log_event("[Q-Learning Scale-In] 무부하 10초 유지로 인한 Spot-A 노드 안전 회수")
+                spot_scale -= 1
+                empty_queue_duration = 0.0
+        elif has_spot_b:
+            if cluster_manager.scale_in_specific_worker("spot_b"):
+                dashboard.log_event("[Q-Learning Scale-In] 무부하 10초 유지로 인한 Spot-B 노드 안전 회수")
+                spot_scale -= 1
+                empty_queue_duration = 0.0
 
     # 2. Q-Learning 의사결정 루프
     while True:
@@ -43,23 +54,26 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         if q_len_real == 0:
             break
             
+        # 4차원 상태 공간 리팩토링 산출
         with gcs_state.queue_lock:
             cnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") == "CNN")
             lstm_rnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") in ["LSTM", "RNN"])
-        t_profile = 0 if cnn_count > lstm_rnn_count else 1
+        if q_len_real == 0:
+            w_mix = 0
+        elif cnn_count > 0 and lstm_rnn_count == 0:
+            w_mix = 1
+        elif lstm_rnn_count > 0 and cnn_count == 0:
+            w_mix = 2
+        else:
+            w_mix = 3
 
         with gcs_state.registry_lock:
             w1_idle = 1 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
             w2_idle = 1 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-        w_active = (w1_idle * 1) + (w2_idle * 2)
+            w3_idle = 1 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
+        a_mix = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
             
-        p_spot = 1 if (time.time() % 30.0) < 10.0 else 0
-        budget_level = 0 if gcs_state.virtual_budget < 20.0 else (1 if gcs_state.virtual_budget < 70.0 else 2)
-        state = (t_profile, w_active, p_spot, budget_level)
-
-        # 가용 액션 설정
-        available_actions = [2]  # HOLD
-        
+        u_sla = 0
         peek_task = None
         with gcs_state.queue_lock:
             for task in gcs_state.task_queue:
@@ -71,31 +85,45 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 if deps_met:
                     peek_task = task
                     break
-                    
+        
+        if peek_task:
+            time_left = peek_task["deadline"] - time.time()
+            if time_left <= 30.0:
+                u_sla = 1
+
+        b_avail = 0 if gcs_state.virtual_budget < 0.7 else 1
+        state = (w_mix, a_mix, u_sla, b_avail)
+
+        # 6대 가용 행동 매핑
+        available_actions = [3]  # HOLD (3)
+        
         if peek_task:
             with gcs_state.registry_lock:
                 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
                     available_actions.append(0)
                 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
                     available_actions.append(1)
+                if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
+                    available_actions.append(2)
                     
         if spot_scale < MAX_SPOT_SCALE:
-            available_actions.append(3)
+            available_actions.append(4)  # SCALE_OUT_SPOT_A
+            available_actions.append(5)  # SCALE_OUT_SPOT_B
 
-        # Action Masking
+        # Action Masking (가상 예산 부족 시 고비용 액션 필터링)
         if gcs_state.virtual_budget <= 0.0:
-            if 0 in available_actions and 1 in available_actions:
+            if 0 in available_actions:
                 available_actions.remove(0)
-            if 3 in available_actions:
-                available_actions.remove(3)
+            if 4 in available_actions:
+                available_actions.remove(4)
 
-        if available_actions == [2]:
+        if available_actions == [3]:
             break
 
         action = agent.choose_action(state, available_actions)
 
-        if action in [0, 1]:
-            target_type = ["on_demand", "spot_a"][action]
+        if action in [0, 1, 2]:
+            target_type = ["on_demand", "spot_a", "spot_b"][action]
             target_task = get_next_runnable_task()
             
             if not target_task:
@@ -122,14 +150,21 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     gcs_state.task_queue.insert(0, target_task)
                 break
             
-        elif action == 2:
-            dashboard.log_event(f"[Q-Learning Action] HOLD 상태 선택 (대기열 크기: {q_len})")
+        elif action == 3:
+            dashboard.log_event(f"[Q-Learning Action] HOLD 상태 선택 (대기열 크기: {q_len_real})")
             break
             
-        elif action == 3:
-            dashboard.log_event(f"[Q-Learning Action] SCALE_OUT 트리거 -> Spot 노드 추가 증설")
+        elif action == 4:
+            dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_A 트리거 -> Spot-A 노드 추가 증설")
             if cluster_manager.scale_out_worker("spot_a"):
                 spot_scale += 1
             break
             
+        elif action == 5:
+            dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_B 트리거 -> Spot-B 노드 추가 증설")
+            if cluster_manager.scale_out_worker("spot_b"):
+                spot_scale += 1
+            break
+            
     return empty_queue_duration
+

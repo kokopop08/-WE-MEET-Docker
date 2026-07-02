@@ -5,7 +5,11 @@ networks:
     external: true
 
 volumes:
-  babyray-data: # 워커 가중치 공유 볼륨
+  babyray-data:
+    name: babyray-data
+
+
+
 
 services:
   # GCS 및 Q-learning 스케줄러를 구동하는 Head 관리 노드
@@ -92,28 +96,28 @@ services:
 #      - HEAD_HOST=head
 #      - HEAD_PORT=50051
 #      - PYTHONUNBUFFERED=1
-#
-#  # Spot-B 노드 (0.5 Core, 512MB Memory, GPU 0.3 배율)
-#  worker-3:
-#    image: babyray-worker-image:latest
-#    container_name: babyray-worker-3
-#    depends_on:
-#      - head
-#    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
-#    deploy:
-#      resources:
-#        limits:
-#          cpus: '0.5'
-#          memory: 512M
-#        reservations:
-#          devices:
-#            - driver: nvidia
-#              count: all
-#              capabilities: [ gpu ]
-#    networks:
-#      - babyray-net
-#    environment:
-#      - NODE_TYPE=spot_b
-#      - HEAD_HOST=head
-#      - HEAD_PORT=50051
-#      - PYTHONUNBUFFERED=1
+  # Spot-B 노드 (0.5 Core, 512MB Memory, GPU 0.3 배율) - 기본 번들 포함
+  worker-3:
+    image: babyray-worker-image:latest
+    container_name: babyray-worker-3
+    depends_on:
+      - head
+    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    networks:
+      - babyray-net
+    environment:
+      - NODE_TYPE=spot_b
+      - HEAD_HOST=head
+      - HEAD_PORT=50051
+      - PYTHONUNBUFFERED=1
+
