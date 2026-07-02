@@ -11,6 +11,14 @@ import psutil
 import threading
 import signal
 
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
+
 # 실행 시 프로젝트 루트 디렉토리 및 현재 디렉토리를 sys.path에 추가하여 패키지들을 정상적으로 찾을 수 있도록 설정합니다.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))

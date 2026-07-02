@@ -5,6 +5,14 @@ import random
 import threading
 import grpc
 
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
+
 # 실행 시 프로젝트 루트 디렉토리를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 

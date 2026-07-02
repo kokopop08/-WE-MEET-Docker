@@ -2,6 +2,14 @@ import time
 import random
 import os
 
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
+
 # 가상 OOM 시뮬레이션 플래그
 oom_simulated = False 
 
@@ -325,5 +333,15 @@ class PyTorchTaskRunner:
         # 메모리 시뮬레이션 공간 해제
         global dummy_memory_holder
         dummy_memory_holder = []
+        
+        # GPU VRAM 캐시 비우기 (Flush GPU cache)
+        if HAS_TORCH:
+            try:
+                del model
+                del optimizer
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
         
         print(f"[Worker Task] 작업 완료: {self.task_id} (총 소요 시간: {self.execution_time:.2f}초)\n")

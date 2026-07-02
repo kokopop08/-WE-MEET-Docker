@@ -5,6 +5,14 @@ import grpc
 import threading
 import random
 
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
+
 # GCS 전역 인메모리 스토어 상태 임포트
 import head.state as gcs_state
 import head.dashboard.server as dashboard
@@ -359,6 +367,15 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                     dashboard.log_event(f"[Reduce Cleanup] 임시 맵 가중치 파일 소거 완료: {f_path}")
                             except Exception as cleanup_err:
                                 dashboard.log_event(f"[Reduce Cleanup 경고] 파일 {f_path} 소거 중 오류: {cleanup_err}")
+                                
+                        # 3. 최종 병합된 가중치 파일 (.pt) 즉각 소거 (WSL2/도커 공간 누수 방지)
+                        final_merged_path = f"data/final_{task_id}.pt"
+                        try:
+                            if os.path.exists(final_merged_path):
+                                os.remove(final_merged_path)
+                                dashboard.log_event(f"[Reduce Cleanup] 최종 병합 가중치 파일 소거 완료: {final_merged_path}")
+                        except Exception as cleanup_err:
+                            dashboard.log_event(f"[Reduce Cleanup 경고] 최종 병합 파일 {final_merged_path} 소거 중 오류: {cleanup_err}")
                     else:
                         dashboard.log_event(f"[Map-Reduce] {task_id} Reduce 병합 단계 실패.")
                 else:
@@ -413,6 +430,16 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                         })
                         except Exception as e_conclusion:
                             dashboard.log_event(f"[Conclusion Engine 경고] 단일 결론 도출 오류: {e_conclusion}")
+                            
+                        # 일반 태스크 최종 가중치 파일 소거 (공간 절약)
+                        final_task_path = f"data/final_{task_id}.pt"
+                        try:
+                            if os.path.exists(final_task_path):
+                                os.remove(final_task_path)
+                                dashboard.log_event(f"[Task Cleanup] 최종 가중치 파일 소거 완료: {final_task_path}")
+                        except Exception as cleanup_err:
+                            dashboard.log_event(f"[Task Cleanup 경고] 파일 {final_task_path} 소거 중 오류: {cleanup_err}")
+                            
                         break
                     elif status_res.status == "FAILED":
                         success = False

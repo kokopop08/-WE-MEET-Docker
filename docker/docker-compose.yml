@@ -103,6 +103,8 @@ services:
     depends_on:
       - head
     command: python -m worker.worker --id worker-3 --type spot_b --port 50054
+    volumes:
+      - babyray-data:/app/data # 공유 데이터 폴더 마운트
     deploy:
       resources:
         limits:

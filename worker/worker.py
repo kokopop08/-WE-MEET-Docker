@@ -19,6 +19,14 @@ from common.config import DEFAULT_HEARTBEAT_INTERVAL # 하트비트 전송 주�
 # 분리된 GPU 시뮬레이터 모듈에서 실행기를 가져옵니다.
 from gpu_simulator import PyTorchTaskRunner
 
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
+
 
 # --- 1. Worker gRPC 서비스 서버 구현 ---
 class BabyRayWorkerServicer(babyray_pb2_grpc.BabyRayServiceServicer):
@@ -150,13 +158,15 @@ def heartbeat_sender_loop(worker_id, node_type, port, head_host, head_port):
     head_address = f"{head_host}:{head_port}" # Head 노드의 주소(IP:Port)를 만듭니다.
     print(f"[Heartbeat] Head 서버 연결 시도: {head_address}...")
     
-    channel = grpc.insecure_channel(head_address) # 연결 채널 생성
-    stub = babyray_pb2_grpc.BabyRayServiceStub(channel) # stub 객체 생성 - grpc 통신 프로토컬 저장
-    
     # 1. Head 서버에 워커 등록 요청
     registered = False # 등록 여부
+    channel = None
+    stub = None
     while not registered: # 등록이 될 때까지 반복
         try:
+            channel = grpc.insecure_channel(head_address) # 연결 채널 생성
+            stub = babyray_pb2_grpc.BabyRayServiceStub(channel) # stub 객체 생성 - grpc 통신 프로토컬 저장
+            
             # Head 노드의 RegisterWorker 함수 호출 -> 내 정보에 등록
             response = stub.RegisterWorker(babyray_pb2.RegisterRequest(
                 worker_id=worker_id,
@@ -168,11 +178,14 @@ def heartbeat_sender_loop(worker_id, node_type, port, head_host, head_port):
                 registered = True
             else:
                 print(f"[Heartbeat] 등록 거절됨. 3초 후 재시도...")
+                if channel is not None:
+                    channel.close()
                 time.sleep(3)
-
         # Worker는 살아있으나, Worker와 Head 사이의 네트워크 회선이 끊어졌거나 Head 서버 자체가 크래시(Crash)되어 다운된 상황이다.
         except grpc.RpcError:
             print(f"[Heartbeat] Head 서버 연결 지연. 3초 후 재시도...")
+            if channel is not None:
+                channel.close()
             time.sleep(3) # 3초 후 재시도 
             
     # 2. 주기적 생존 신고 및 상태 리포트
