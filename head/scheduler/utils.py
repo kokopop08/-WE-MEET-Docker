@@ -62,10 +62,9 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
         )
         
         if is_map_reduce:
-            # 맵-리듀스로 분배 연산이 진행되므로, 원래 이 스레드의 주체 워커 락을 풀어주어 맵/리듀스 풀에 참가시킵니다 (데드락 방지).
-            with gcs_state.registry_lock:
-                if worker_id in gcs_state.worker_registry:
-                    gcs_state.worker_registry[worker_id]["status"] = "IDLE"
+            # 원래 이 스레드의 주체 워커(worker_id)는 전체 Map-Reduce 동안 BUSY 상태를 유지해야
+            # 백그라운드 연산 도중 스케줄러가 다른 일반 작업을 새롭게 할당하는 것을 원천 차단합니다.
+            pass
 
             dashboard.log_event(f"[Map-Reduce] {task_id} 병렬 학습 분할 개시. 가용 IDLE 워커 수: {len(available_idle_workers)}")
             
@@ -137,7 +136,9 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 finally:
                     with gcs_state.registry_lock:
                         if w_id in gcs_state.worker_registry:
-                            gcs_state.worker_registry[w_id]["status"] = "IDLE"
+                            # 주체 워커(worker_id)는 Map-Reduce가 완전히 끝날 때까지 IDLE로 복구하지 않고 점유 상태(BUSY)를 유지합니다.
+                            if w_id != worker_id:
+                                gcs_state.worker_registry[w_id]["status"] = "IDLE"
                     
                     map_results[sub_idx] = {
                         "success": sub_success,
@@ -228,24 +229,28 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 reduce_worker_id = None
                 reduce_worker_info = None
                 
-                while True:
-                    with gcs_state.registry_lock:
-                        on_demand_candidates = [
-                            (wid, info) for wid, info in gcs_state.worker_registry.items()
-                            if info["node_type"] == "on_demand" and info["status"] == "IDLE"
-                        ]
-                    if on_demand_candidates:
-                        reduce_worker_id, reduce_worker_info = on_demand_candidates[0]
-                        break
-                    else:
+                # 만약 원래 주체 워커가 온디맨드 노드라면 바로 지정하여 상태 경쟁을 방지합니다.
+                with gcs_state.registry_lock:
+                    if worker_id in gcs_state.worker_registry and gcs_state.worker_registry[worker_id]["node_type"] == "on_demand":
+                        reduce_worker_id = worker_id
+                        reduce_worker_info = gcs_state.worker_registry[worker_id].copy()
+                        gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
+                
+                if not reduce_worker_id:
+                    while True:
+                        with gcs_state.registry_lock:
+                            on_demand_candidates = [
+                                (wid, info) for wid, info in gcs_state.worker_registry.items()
+                                if info["node_type"] == "on_demand" and info["status"] == "IDLE"
+                            ]
+                            if on_demand_candidates:
+                                reduce_worker_id, reduce_worker_info = on_demand_candidates[0]
+                                gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
+                                break
                         dashboard.log_event(f"[Reduce Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중...")
                         time.sleep(1.0)
                 
                 if reduce_worker_id:
-                    
-                    with gcs_state.registry_lock:
-                        if reduce_worker_id in gcs_state.worker_registry:
-                            gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
                             
                     reduce_success = False
                     reduce_ip = reduce_worker_info['ip']

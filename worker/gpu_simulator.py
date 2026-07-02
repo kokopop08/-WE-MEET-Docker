@@ -181,10 +181,16 @@ class PyTorchTaskRunner:
             
             # [FedAvg 교차 추론 검증]
             inferred_type = "CNN"
-            if "rnn" in self.task_id.lower():
-                inferred_type = "RNN"
-            elif "lstm" in self.task_id.lower():
-                inferred_type = "LSTM"
+            # State dict의 텐서 키값 패턴 매칭을 통해 실제 모델 타입을 정확하게 판별합니다.
+            if averaged_sd:
+                if any(k.startswith("rnn.") for k in averaged_sd.keys()):
+                    inferred_type = "RNN"
+                elif any(k.startswith("lstm.") for k in averaged_sd.keys()):
+                    inferred_type = "LSTM"
+                elif "rnn" in self.task_id.lower():
+                    inferred_type = "RNN"
+                elif "lstm" in self.task_id.lower():
+                    inferred_type = "LSTM"
             
             test_task = get_task_by_type(inferred_type)
             if test_task:
