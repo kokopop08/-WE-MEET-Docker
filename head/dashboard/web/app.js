@@ -323,6 +323,44 @@ async function updateDashboard() {
             consoleLogs.scrollTop = consoleLogs.scrollHeight;
             lastLogCount = logs.length;
         }
+        
+        // 5.5. AI Inference Conclusions (최종 결론 패널 바인딩)
+        const conclusionContainer = document.getElementById("conclusion-container");
+        const conclusionCountBadge = document.getElementById("conclusion-count");
+        const conclusionsList = data.conclusions || [];
+        
+        conclusionCountBadge.innerText = `결론 ${conclusionsList.length}개 도출`;
+        
+        if (conclusionsList.length === 0) {
+            conclusionContainer.innerHTML = `
+                <div class="empty-placeholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; color: var(--text-muted); text-align: center;">
+                    <div class="empty-icon" style="font-size: 2rem; margin-bottom: 8px;">💡</div>
+                    <p style="margin: 0; font-size: 0.85rem;">도출된 분석 결론이 없습니다.<br>Map-Reduce 연산 완료 시, 병합 및 다수결 결과가 여기에 실시간으로 기록됩니다.</p>
+                </div>
+            `;
+        } else {
+            let conclusionsHtml = "";
+            conclusionsList.slice().reverse().forEach(c => {
+                const dateStr = new Date(c.timestamp * 1000).toLocaleTimeString();
+                let modelColor = "#3b82f6";
+                if (c.model_type.toUpperCase() === "CNN") modelColor = "#10b981";
+                if (c.model_type.toUpperCase() === "RNN") modelColor = "#8b5cf6";
+                if (c.model_type.toUpperCase() === "LSTM") modelColor = "#ec4899";
+                
+                conclusionsHtml += `
+                    <div class="conclusion-card" style="background: rgba(255, 255, 255, 0.03); border-left: 4px solid ${modelColor}; padding: 12px; border-radius: 6px; font-family: 'Inter', sans-serif; box-shadow: 0 2px 8px rgba(0,0,0,0.15);">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.8rem; color: var(--text-muted);">
+                            <span>태스크: <strong>${c.task_id}</strong> [${c.model_type}]</span>
+                            <span>${dateStr}</span>
+                        </div>
+                        <div style="font-size: 0.95rem; color: #f1f5f9; font-weight: 500; line-height: 1.4;">
+                            ${c.conclusion}
+                        </div>
+                    </div>
+                `;
+            });
+            conclusionContainer.innerHTML = conclusionsHtml;
+        }
 
     } catch (err) {
         const statusContainer = document.getElementById("status-container");

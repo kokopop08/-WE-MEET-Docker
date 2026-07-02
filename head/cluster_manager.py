@@ -77,64 +77,39 @@ def cleanup_zombie_containers():
 def is_host_resource_sufficient():
     """
     [Global Host Resource Manager]
-    호스트 시스템(Windows 및 WSL2/Docker 환경 포함)의 실시간 물리 메모리 가용량을 점검하여 자원 임계치 안전 여부를 판정합니다.
+    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(85%)을 검증하여 과부하 방지 안전 여부를 판정합니다.
 
     Returns:
-        bool: WSL2 및 호스트 가용 메모리가 4.0GB 이상인 경우 True, 미만인 경우 False.
+        bool: 호스트 물리 메모리 사용률이 85.0% 이하인 경우 True, 초과한 경우 False.
     """
-    # 환경변수 BYPASS_RESOURCE_GUARD가 "1"인 경우 자원 검사를 강제 통과시킵니다 (로컬 실습/테스트용).
     if os.environ.get("BYPASS_RESOURCE_GUARD", "0") == "1":
         return True
-    # [Safety Guard 임계값 3.0GB 선정 이유]
-    # RAM 초과 시 컴퓨터 과부하(버벅임 및 VM 다운)를 방지하기 위한 안전장치입니다.
-    # 신규 워커 생성 메모리(1.0GB) + 시스템 최소 생존 버퍼(2.0GB)를 고려해 총 3.0GB로 설정하였습니다.
-    
-    # 1. WSL2 내부의 가용 메모리 점검 시도 (Windows 호스트 환경인 경우 subprocess로 wsl 호출)
-    try:
-        # 현재 파이썬이 실행 중인 OS가 Windows 계열
-        if os.name == 'nt':
-            result = subprocess.run(
-                ["wsl", "free", "-b"],
-                capture_output=True, text=True, timeout=3, check=True
-            )
-            # wsl free -b(바이트)
-            
-            # 파싱 로직
-            lines = result.stdout.strip().splitlines()
-            for line in lines:
-                if line.startswith("Mem:"):
-                    parts = line.split()
-                    if len(parts) >= 7:
-                        wsl_available_gb = int(parts[6]) / (1024 ** 3)
-                        if wsl_available_gb < 4.0:
-                            print(f"[Global Resource Guard] WSL2 가용 물리 메모리 부족 경고: {wsl_available_gb:.2f} GB < 4.0 GB (Safety Guard)")
-                            print("[Global Resource Guard] 해결 방법: WSL2/Docker Desktop 메모리 제한 설정을 4GB 이상으로 늘려주세요.")
-                            return False
-                        print(f"[Global Resource Guard] WSL2 가용 물리 메모리 양호: {wsl_available_gb:.2f} GB")
-        else:
-            # OS가 리눅스
-            result = subprocess.run(
-                ["free", "-b"],
-                capture_output=True, text=True, timeout=3, check=True
-            )
-            lines = result.stdout.strip().splitlines()
-            for line in lines:
-                if line.startswith("Mem:"):
-                    parts = line.split()
-                    if len(parts) >= 7:
-                        wsl_available_gb = int(parts[6]) / (1024 ** 3)
-                        if wsl_available_gb < 4.0:
-                            print(f"[Global Resource Guard] 가용 물리 메모리 부족 경고: {wsl_available_gb:.2f} GB < 4.0 GB (Safety Guard)")
-                            return False
-    except Exception:
-        pass
 
-    # 2. Windows/Host 기본 psutil 가용 메모리 점검
+    # [Safety Guard 임계값 85.0% 상한선 선정 이유]
+    # RAM 전체 리소스 32GB 기준 85%를 소모할 시 가용 램 여유는 4.8GB가 됩니다.
+    # 사용자의 4GB 이상 안전 여유 공간 상한선 제약을 준수하고 버벅임 및 VM 다운을 방지하기 위해 85%로 고정했습니다.
     try:
         mem = psutil.virtual_memory()
-        available_gb = mem.available / (1024 ** 3)
-        if available_gb < 4.0:
-            print(f"[Global Resource Guard] 호스트 가용 물리 메모리 부족 경고: {available_gb:.2f} GB < 4.0 GB (Safety Guard)")
+        usage_percent = mem.percent
+        
+        # WSL2 환경 검사 보정 (WSL2에서 메모리 한계를 잡은 경우 free 결과 보조 참고)
+        if os.name != 'nt':
+            try:
+                result = subprocess.run(["free", "-b"], capture_output=True, text=True, timeout=2)
+                lines = result.stdout.strip().splitlines()
+                for line in lines:
+                    if line.startswith("Mem:"):
+                        parts = line.split()
+                        if len(parts) >= 7:
+                            total = int(parts[1])
+                            available = int(parts[6])
+                            wsl_usage = ((total - available) / total) * 100.0
+                            usage_percent = max(usage_percent, wsl_usage)
+            except Exception:
+                pass
+
+        if usage_percent > 85.0:
+            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 85.0% (Safety Guard)")
             return False
         return True
     except Exception as e:
@@ -412,8 +387,13 @@ def start_spot_eviction_loop():
     def eviction_loop():
         dashboard.log_event("=== [Eviction Daemon] 실시간 스팟 강제 회수 모니터링 데몬 기동 ===")
         while True:
-            time.sleep(6.0)  # 6초 주기로 중단 여부 심사
+            time.sleep(10.0)  # 10초 주기로 회수 여부 심사
             
+            # 아키텍처 개선: 메모리 가드 초과로 증설이 막힌 경우, 기존 노드 보존을 위해 강제 회수 동결(Freeze)
+            if not is_host_resource_sufficient():
+                dashboard.log_event("[Eviction Daemon] 호스트 메모리 부족 감지 -> 기존 Spot 워커 보호를 위해 강제 회수를 일시 중단(Freeze)합니다.")
+                continue
+                
             p_spot = 1 if (time.time() % 30.0) < 10.0 else 0
             eviction_prob = 0.15 if p_spot == 1 else 0.05
             

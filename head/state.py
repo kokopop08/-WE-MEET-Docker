@@ -35,6 +35,10 @@ virtual_budget = 10.0  # 초기 예산 $10.0달러 (현실적인 AWS 요율과 �
 task_counter = 0        # 고유한 TASK ID 생성을 위한 카운터 변수
 """int: 고유 태스크 식별 번호 발급을 위한 전역 카운터."""
 
+# 최종 훈련/추론 예측 결론을 대시보드에 뿌려주기 위한 저장소
+latest_conclusions = []
+"""list: 태스크별 최종 FedAvg 병합 및 추론 결론 텍스트의 누적 레포지토리."""
+
 # 스케줄러 구동 모드
 SCHEDULER_MODE = "dynamic"
 """str: 현재 활성화된 스케줄러 구동 모드 ("static", "dynamic", "q_learning")."""

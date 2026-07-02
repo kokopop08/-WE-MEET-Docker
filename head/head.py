@@ -185,7 +185,8 @@ def get_dashboard_data():
         "q_epsilon": q_epsilon,
         "host_cpu": psutil.cpu_percent(),
         "host_mem": psutil.virtual_memory().percent,
-        "gpu_free_vram": cluster_manager.get_gpu_free_memory()
+        "gpu_free_vram": cluster_manager.get_gpu_free_memory(),
+        "conclusions": state.latest_conclusions
     }
 
 

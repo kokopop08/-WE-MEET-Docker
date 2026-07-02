@@ -66,27 +66,8 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             sub_epochs = epochs // num_splits
             remainder = epochs % num_splits
             
-            map_threads = []
             map_results = {}
             
-            selected_workers = available_idle_workers[:num_splits]
-            with gcs_state.registry_lock:
-                for sub_idx, (wid, _) in enumerate(selected_workers):
-                    if wid in gcs_state.worker_registry:
-                        gcs_state.worker_registry[wid]["status"] = "BUSY"
-                        
-                        # Task Lineage DAG 정보 등록 (장애 복구 추적용)
-                        sub_task_id = f"{task_id}-map-{sub_idx}"
-                        sub_ep = sub_epochs + (remainder if sub_idx == 0 else 0)
-                        gcs_state.task_lineage[sub_task_id] = {
-                            "parent": task_id,
-                            "model_type": model_type,
-                            "epochs": sub_ep,
-                            "worker_id": wid,
-                            "status": "RUNNING",
-                            "dataset_path": task.get("dataset_path", "")
-                        }
-                        
             def execute_map_subtask(sub_idx, w_id, w_info):
                 sub_task_id = f"{task_id}-map-{sub_idx}"
                 sub_ep = sub_epochs + (remainder if sub_idx == 0 else 0)
@@ -97,6 +78,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 
                 sub_success = False
                 sub_start = time.time()
+                inference_log = None
                 try:
                     sub_channel = grpc.insecure_channel(sub_address)
                     sub_stub = babyray_pb2_grpc.BabyRayServiceStub(sub_channel)
@@ -126,6 +108,8 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                     for line in stat.logs.splitlines():
                                         if line.strip():
                                             dashboard.log_event(f"[{w_id}] {line.strip()}")
+                                            if any(tag in line for tag in ["[CNN Inference Done]", "[RNN Forecast Done]", "[LSTM Generation Done]"]):
+                                                inference_log = line.strip()
                                 with gcs_state.registry_lock:
                                     if sub_task_id in gcs_state.task_lineage:
                                         gcs_state.task_lineage[sub_task_id]["status"] = "SUCCESS"
@@ -152,21 +136,73 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                         "worker_id": w_id,
                         "worker_type": w_info["node_type"],
                         "execution_time": time.time() - sub_start,
-                        "output_file": f"data/final_{sub_task_id}.pt"
+                        "output_file": f"data/final_{sub_task_id}.pt",
+                        "inference_log": inference_log
                     }
+
+            # 아키텍처 개선: 스팟 회수(Eviction)에 따른 전체 무한 롤백을 피하기 위한 선택적 부분 재시도(Selective Retry) 루프
+            max_retries = 5
+            all_maps_success = False
+            
+            for attempt in range(max_retries):
+                pending_indices = [i for i in range(num_splits) if i not in map_results or not map_results[i]["success"]]
+                if not pending_indices:
+                    all_maps_success = True
+                    break
+                
+                dashboard.log_event(f"[Map-Reduce] {task_id} 시도 {attempt+1}/{max_retries} | 미완료 맵 서브태스크: {pending_indices}")
+                
+                # 매 시도마다 실시간 가용 IDLE 워커 재수집
+                with gcs_state.registry_lock:
+                    available_idle_workers = [
+                        (wid, info) for wid, info in gcs_state.worker_registry.items()
+                        if info["status"] == "IDLE"
+                    ]
+                
+                if not available_idle_workers:
+                    time.sleep(2.0)
+                    continue
+                
+                # 안정성 강화를 위해 worker-1(온디맨드) 노드가 가용하다면 최우선으로 매핑 정렬
+                available_idle_workers.sort(key=lambda x: 0 if x[0] == "worker-1" else 1)
+                
+                map_threads = []
+                
+                for idx_in_pending, sub_idx in enumerate(pending_indices):
+                    if idx_in_pending >= len(available_idle_workers):
+                        break # 가용 워커가 소진되면 다음 시도로 이월
+                        
+                    wid, winfo = available_idle_workers[idx_in_pending]
                     
-            for idx, (wid, winfo) in enumerate(selected_workers):
-                t = threading.Thread(target=execute_map_subtask, args=(idx, wid, winfo))
-                t.start()
-                map_threads.append(t)
-                
-            for t in map_threads:
-                t.join()
-                
-            all_maps_success = len(map_results) == num_splits and all(r["success"] for r in map_results.values())
+                    with gcs_state.registry_lock:
+                        if wid in gcs_state.worker_registry:
+                            gcs_state.worker_registry[wid]["status"] = "BUSY"
+                            
+                    sub_task_id = f"{task_id}-map-{sub_idx}"
+                    sub_ep = sub_epochs + (remainder if sub_idx == 0 else 0)
+                    
+                    with gcs_state.registry_lock:
+                        gcs_state.task_lineage[sub_task_id] = {
+                            "parent": task_id,
+                            "model_type": model_type,
+                            "epochs": sub_ep,
+                            "worker_id": wid,
+                            "status": "RUNNING",
+                            "dataset_path": task.get("dataset_path", "")
+                        }
+                    
+                    t = threading.Thread(target=execute_map_subtask, args=(sub_idx, wid, winfo))
+                    t.start()
+                    map_threads.append(t)
+                    
+                for t in map_threads:
+                    t.join()
+                    
+            if not all_maps_success:
+                all_maps_success = len(map_results) == num_splits and all(r["success"] for r in map_results.values())
             
             if not all_maps_success:
-                dashboard.log_event(f"[Map-Reduce] 경고: 일부 맵 태스크가 실패했습니다. 복구 복구 루프 재진입.")
+                dashboard.log_event(f"[Map-Reduce] 경고: 최대 재시도 한도 초과로 일부 맵 태스크가 최종 실패했습니다. 복구 복구 루프 재진입.")
                 success = False
                 execution_time = time.time() - start_time
             else:
@@ -250,6 +286,63 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     if success:
                         dashboard.log_event(f"[Map-Reduce] {task_id} 최종 Map-Reduce FedAvg 병합 성공! (총 시간: {execution_time:.2f}초)")
                         
+                        # --- 최종 결론 도출 및 결합 로직 ---
+                        try:
+                            import re
+                            merged_conclusion = ""
+                            logs_to_merge = [r.get("inference_log") for r in map_results.values() if r and r.get("inference_log")]
+                            
+                            if model_type.upper() == "CNN":
+                                classes = []
+                                confs = []
+                                for log in logs_to_merge:
+                                    m = re.search(r"예측 클래스:\s*(\d+)\s*\(신뢰도:\s*([\d.]+)%\)", log)
+                                    if m:
+                                        classes.append(int(m.group(1)))
+                                        confs.append(float(m.group(2)))
+                                if classes:
+                                    from collections import Counter
+                                    majority_class = Counter(classes).most_common(1)[0][0]
+                                    avg_conf = sum(confs) / len(confs)
+                                    merged_conclusion = f"[CNN 분산 병합 결론] 다수결 이미지 분석 결과 -> 최종 예측 클래스: {majority_class} (평균 신뢰도: {avg_conf:.2f}%)"
+                                    
+                            elif model_type.upper() == "RNN":
+                                all_forecasts = []
+                                for log in logs_to_merge:
+                                    m = re.search(r"예측값\s*->\s*\[(.*?)\]", log)
+                                    if m:
+                                        vals = [float(v.strip()) for v in m.group(1).split(",")]
+                                        all_forecasts.append(vals)
+                                if all_forecasts:
+                                    steps = len(all_forecasts[0])
+                                    avg_forecasts = []
+                                    for step in range(steps):
+                                        step_vals = [f[step] for f in all_forecasts if len(f) > step]
+                                        avg_forecasts.append(sum(step_vals) / len(step_vals))
+                                    avg_forecasts_str = ", ".join([f"{v:.3f}" for v in avg_forecasts])
+                                    merged_conclusion = f"[RNN 분산 병합 결론] 예측 수치 FedAvg 평균값 -> [{avg_forecasts_str}]"
+                                    
+                            elif model_type.upper() == "LSTM":
+                                text_fragments = []
+                                for log in logs_to_merge:
+                                    m = re.search(r"텍스트 생성 결과\s*->\s*\"(.*?)\"", log)
+                                    if m:
+                                        text_fragments.append(m.group(1))
+                                if text_fragments:
+                                    joined_text = " | ".join(text_fragments)
+                                    merged_conclusion = f"[LSTM 분산 병합 결론] 이종 분할 텍스트 병합 -> \"{joined_text}\""
+                                    
+                            if merged_conclusion:
+                                dashboard.log_event(f"[Conclusion Engine] {merged_conclusion}")
+                                gcs_state.latest_conclusions.append({
+                                    "task_id": task_id,
+                                    "model_type": model_type,
+                                    "timestamp": time.time(),
+                                    "conclusion": merged_conclusion
+                                })
+                        except Exception as e_conclusion:
+                            dashboard.log_event(f"[Conclusion Engine 경고] 결론 도출 및 병합 중 오류: {e_conclusion}")
+
                         # 1. task_lineage 딕셔너리에서 완료된 맵 족보 정리 (메모리 릭 방지)
                         with gcs_state.registry_lock:
                             for sub_id in list(gcs_state.task_lineage.keys()):
@@ -304,6 +397,22 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                         success = True
                         execution_time = time.time() - start_time
                         dashboard.log_event(f"[Scheduler Feedback] 작업 {task_id} 완료 성공! (실제 수행 시간: {execution_time:.2f}초)")
+                        
+                        # 단일 실행 시에도 최종 결론 수집
+                        try:
+                            if status_res.logs:
+                                for line in status_res.logs.splitlines():
+                                    if any(tag in line for tag in ["[CNN Inference Done]", "[RNN Forecast Done]", "[LSTM Generation Done]"]):
+                                        conclusion_text = f"[{model_type} 단일 실행 결론] {line.strip()}"
+                                        dashboard.log_event(f"[Conclusion Engine] {conclusion_text}")
+                                        gcs_state.latest_conclusions.append({
+                                            "task_id": task_id,
+                                            "model_type": model_type,
+                                            "timestamp": time.time(),
+                                            "conclusion": conclusion_text
+                                        })
+                        except Exception as e_conclusion:
+                            dashboard.log_event(f"[Conclusion Engine 경고] 단일 결론 도출 오류: {e_conclusion}")
                         break
                     elif status_res.status == "FAILED":
                         success = False

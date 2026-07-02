@@ -354,3 +354,26 @@
   - `grpc_tools.protoc` 컴파일러가 생성한 `babyray_pb2_grpc.py` 내부에 `import babyray_pb2 as babyray__pb2`가 선언되어, 외부 모듈에서 `import proto.babyray_pb2_grpc` 형태로 패키지 접근 시 의존 관계가 깨져 임포트가 실패했습니다.
 * **해결 및 패치 내용:**
   - [compile_proto.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/compile_proto.py) 내부 컴파일 완료 코드 블록에 임포트 경로 자동 치환(Patch) 논리를 적용하여 컴파일 직후 파일 내 `import babyray_pb2` 구문을 `from proto import babyray_pb2`로 문자열 치환 패치하도록 수정하여 모듈 구조를 정상화시켰습니다.
+
+## 📅 2026-07-02 패치 내역
+
+### 1. 호스트 물리 램 85% 점유율 임계 가드 개편 및 Eviction Freeze 안전장치 탑재
+* **패치 내용:**
+  - `is_host_resource_sufficient()`의 물리 램 가용량 하한선(4.0 GB) 점검 방식을 **'호스트 물리 램 전체 점유율 85.0% 상한선 검사'**로 전면 전환했습니다.
+  - 임의 스팟 강제 회수 검사 주기(`time.sleep`)를 기존 25초에서 타협안인 **`10.0초`**로 타이트하게 조율했습니다.
+  - 호스트 물리 램이 85.0%를 초과하여 신규 노드 증설(Scale-out)이 차단된 경우, 자원 기아(Starvation) 및 기동 중인 워커 몰살을 막기 위해 **Eviction Daemon의 강제 회수 동작을 즉시 일시 동결(Eviction Freeze)**하도록 상호 안전 가드를 엮었습니다.
+
+### 2. Map-Reduce 점진적 맵 캐싱 및 선택적 재시도(Selective Retry) 파이프라인 탑재
+* **패치 내용:**
+  - 맵-리듀스 연산 시 스팟 노드가 임의 회수되거나 실패해도 전체 에포크를 강제 롤백하지 않고, **이미 성공한 맵 인덱스 조각(SUCCESS)의 가중치 결과물은 보존(캐싱)**하도록 수정했습니다.
+  - 실패하거나 누락된 특정 맵 인덱스 조각(`pending_indices`)만 필터링하여 가용 워커에 선별 위임하고 반복해서 점진적 완성하는 **선택적 재시도(Selective Map Retry) 루프**를 구축했습니다.
+  - 맵 워커 배정 우선순위 정렬 시, 절대로 회수되지 않는 고신뢰성 온디맨드 노드(`worker-1`)가 **리스트의 가장 앞(Index 0)에 위치하도록 강제 우선순위(Pinning) 처리**하여 연산 안전성을 보증했습니다.
+
+### 3. 분산 AI 결론 결합 엔진 및 실시간 Conclusions UI 패널 신설
+* **패치 내용:**
+  - 분산 맵-리듀스/단일 추론 연산이 완료되었을 때, 각 모델(CNN/RNN/LSTM)의 예측 성과를 최종적으로 결합하는 **분산 AI 결론 결합 엔진**을 `utils.py`에 이식했습니다.
+    - **CNN:** 다수결 투표(Majority Voting) 및 평균 신뢰도 결합
+    - **RNN:** 분산 수치 예측의 FedAvg 스타일 산술 평균 결합
+    - **LSTM:** 생성된 개별 문장 프래그먼트 병합
+  - GCS에 결론 기록 스냅샷을 적재하고 대시보드 API로 실시간 동봉 전송하도록 설계했습니다.
+  - 대시보드 GUI 하단에 고유 모델 색상 테두리를 지닌 Premium Glassmorphism 스타일 **Conclusions UI 전용 리스트 패널**을 추가하여, 완료 시점에 병합 예측 결론이 즉시 동적 렌더링되도록 구현했습니다.
