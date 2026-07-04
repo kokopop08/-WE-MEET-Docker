@@ -203,10 +203,13 @@ def serve():
     Head Node 메인 서비스 데몬을 구동합니다.
     좀비 컨테이너 소거 비동기 스레드, 대시보드 웹 서버, gRPC 서버, Q-Learning 백그라운드 스케줄러 루프를 초기화합니다.
     """
-    # 0. 잔존 좀비 컨테이너 동기 청소 (부팅 전 이전 라이프사이클의 잔재 완전 소거를 통한 정합성 확보)
+    # 0. GCS 상태 파일 복구 (재시작 시 상태 원복을 위해 복구)
+    state.load_gcs_state()
+
+    # 0.1. 잔존 좀비 컨테이너 동기 청소 (부팅 전 이전 라이프사이클의 잔재 완전 소거를 통한 정합성 확보)
     cluster_manager.cleanup_zombie_containers()
     
-    # 0.1. 스팟 강제 회수(Eviction) 모니터링 백그라운드 루프 작동
+    # 0.2. 스팟 강제 회수(Eviction) 모니터링 백그라운드 루프 작동
     cluster_manager.start_spot_eviction_loop() # cluster_manger.py 참고
     
     # 0.5. 실시간 GUI 모니터링 대시보드 서버 기동 (8080 포트)
@@ -234,6 +237,19 @@ def serve():
             server.stop(0)
         except Exception:
             pass
+        
+        # 공유 볼륨 내 임시/최종 가중치 파일 정리 (파일 누수 차단)
+        try:
+            import glob
+            print("[Head] 공유 볼륨 내 임시/최종 가중치 파일(.pt)들을 정리합니다...")
+            leftover_files = glob.glob("data/checkpoint_*.pt") + glob.glob("data/final_*.pt")
+            for f_path in leftover_files:
+                if os.path.exists(f_path):
+                    os.remove(f_path)
+            print(f"[Head] 총 {len(leftover_files)}개의 가중치 파일이 정리되었습니다.")
+        except Exception as e:
+            print(f"[Head] 공유 볼륨 정리 중 오류 발생: {e}")
+
         try:
             print("[Head] 기동 중인 모든 동적 스팟 워커 컨테이너들을 일괄 청소합니다...")
             cluster_manager.cleanup_zombie_containers()

@@ -57,7 +57,7 @@ def check_and_cleanup_dead_workers():
     dead_workers = []
     with gcs_state.registry_lock:
         for wid, info in list(gcs_state.worker_registry.items()):
-            if current_time - info["last_heartbeat"] > 15.0:
+            if current_time - info["last_heartbeat"] > 3.0:
                 dead_workers.append(wid)
         for wid in dead_workers:
             dashboard.log_event(f"[Scheduler GCS] [DEAD 노드 감지] {wid} 노드가 오프라인 처리되었습니다.")
@@ -79,10 +79,24 @@ def check_and_cleanup_dead_workers():
 def generate_mock_tasks():
     """시뮬레이터 부하 검증을 위해 주기적으로 랜덤 가상 태스크를 생성하여 큐에 적재합니다."""
     model_types = ["CNN", "RNN", "LSTM"]
-    if random.random() < 0.4:
-        num_new_tasks = random.randint(1, 2)
+    
+    # 버스티(Bursty) 태스크 유입 패턴 시뮬레이션
+    # 8%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
+    # 92%의 확률로는 5%의 매우 낮은 확률로만 단일 태스크 유입
+    is_burst = random.random() < 0.08
+    is_normal = not is_burst and (random.random() < 0.05)
+    
+    if is_burst:
+        num_new_tasks = random.randint(5, 8)
+        dashboard.log_event(f"⚡ [Burst Traffic Alert] 태스크 폭발 유입 발생! (신규: {num_new_tasks}개)")
+    elif is_normal:
+        num_new_tasks = 1
+    else:
+        num_new_tasks = 0
+        
+    if num_new_tasks > 0:
         with gcs_state.queue_lock:
-            if len(gcs_state.task_queue) < 15:
+            if len(gcs_state.task_queue) < 25:  # 버스트 수용을 위해 최대 큐 크기 상향
                 for _ in range(num_new_tasks):
                     gcs_state.task_counter += 1
                     task_id = f"task-{gcs_state.task_counter:04d}"
@@ -124,6 +138,14 @@ def scheduler_loop():
     
     while True:
         time.sleep(1.0)  # 1초 주기 의사결정 루프
+        
+        # --- 0. 가상 예산 실시간 차감 (노드 상시 구동 비용 청구) ---
+        with gcs_state.registry_lock:
+            for wid, info in gcs_state.worker_registry.items():
+                node_type = info.get("node_type", "on_demand").lower()
+                cost_profile = agent.nodes_config.get(node_type, {"cost_per_hour": 0.0})
+                cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
+                gcs_state.virtual_budget -= (cost_per_hour / 3600.0)
         
         # --- 1. DEAD 노드 헬스체크 및 격리 제거 ---
         check_and_cleanup_dead_workers()

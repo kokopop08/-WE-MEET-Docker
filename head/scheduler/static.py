@@ -20,15 +20,21 @@ def run_static_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worker
     with gcs_state.queue_lock:
         q_len_real = len(gcs_state.task_queue)
     
-    if q_len_real >= 5 and spot_scale < MAX_SPOT_SCALE:
-        dashboard.log_event(f"[Static Scale-Out] 대기 큐 크기 임계치 초과 ({q_len_real} >= 5) -> Spot 워커 증설 지시")
+    if q_len_real >= 8 and spot_scale < MAX_SPOT_SCALE - 1:
+        dashboard.log_event(f"[Static Scale-Out] 대기 큐 심각 적체 ({q_len_real} >= 8) -> Spot 워커 2대 동시 증설 지시")
+        if cluster_manager.scale_out_worker("spot_a"):
+            spot_scale += 1
+        if cluster_manager.scale_out_worker("spot_a"):
+            spot_scale += 1
+    elif q_len_real >= 4 and spot_scale < MAX_SPOT_SCALE:
+        dashboard.log_event(f"[Static Scale-Out] 대기 큐 크기 임계치 초과 ({q_len_real} >= 4) -> Spot 워커 1대 증설 지시")
         if cluster_manager.scale_out_worker("spot_a"):
             spot_scale += 1
             
     if q_len_real == 0:
         scale_in_timer += 1.0
-        if scale_in_timer >= 10.0 and spot_scale > 0:
-            dashboard.log_event("[Static Scale-In] 대기열 유휴 상태 10초 지속 -> Spot 워커 순차 회수")
+        if scale_in_timer >= 3.0 and spot_scale > 0:
+            dashboard.log_event("[Static Scale-In] 대기열 유휴 상태 3초 지속 -> Spot 워커 순차 회수")
             if cluster_manager.scale_in_specific_worker("spot_a"):
                 spot_scale -= 1
                 scale_in_timer = 0.0

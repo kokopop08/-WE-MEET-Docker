@@ -61,7 +61,7 @@ def check_and_cleanup_dead_workers():
         for wid, info in list(gcs_state.worker_registry.items()):
             if wid == "worker-1" or info.get("node_type") == "on_demand":
                 continue
-            if current_time - info["last_heartbeat"] > 15.0:
+            if current_time - info["last_heartbeat"] > 3.0:
                 dead_workers.append(wid)
         for wid in dead_workers:
             dashboard.log_event(f"[Scheduler GCS] [DEAD 노드 감지] {wid} 노드가 오프라인 처리되었습니다.")
@@ -71,13 +71,34 @@ def check_and_cleanup_dead_workers():
             for sub_task_id, lineage_info in list(gcs_state.task_lineage.items()):
                 if lineage_info["worker_id"] == wid and lineage_info["status"] == "RUNNING":
                     lineage_info["status"] = "FAILED"
+                    
+                    # 최신 체크포인트 탐색하여 이어서 학습 재개 연동
+                    last_epoch = 0
+                    checkpoint_file = None
+                    epochs = lineage_info["epochs"]
+                    for ep in range(epochs, 0, -1):
+                        chk_path = f"data/checkpoint_{sub_task_id}_epoch_{ep}.pt"
+                        if os.path.exists(chk_path):
+                            last_epoch = ep
+                            checkpoint_file = chk_path
+                            break
+                    
+                    recovered_epochs = epochs
+                    recovered_dataset = lineage_info["dataset_path"]
+                    if last_epoch > 0 and last_epoch < epochs:
+                        recovered_epochs = epochs - last_epoch
+                        recovered_dataset = checkpoint_file
+                        dashboard.log_event(f"[장애 복구] 유실된 subtask {sub_task_id} 중단 감지 -> {last_epoch} Epoch 가중치를 기반으로 이어서 학습 복구(남은 {recovered_epochs} Epochs) 대기 큐 재할당.")
+                    else:
+                        dashboard.log_event(f"[장애 복구] 유실된 subtask {sub_task_id} 장애 유실 감지 -> 복구를 위해 대기 큐 재할당 (처음부터 재학습).")
+
                     recovered_tasks.append({
                         "task_id": sub_task_id,
                         "model_type": lineage_info["model_type"],
-                        "epochs": lineage_info["epochs"],
+                        "epochs": recovered_epochs,
                         "deadline": time.time() + 45.0,
                         "enqueue_time": time.time(),
-                        "dataset_path": lineage_info["dataset_path"],
+                        "dataset_path": recovered_dataset,
                         "is_recovered_subtask": True
                     })
 
@@ -86,6 +107,11 @@ def check_and_cleanup_dead_workers():
             for task in recovered_tasks:
                 gcs_state.task_queue.insert(0, task)
                 dashboard.log_event(f"[Lineage Recovery] !!! Cascaded Recovery 작동 !!! DEAD 워커에서 유실된 subtask '{task['task_id']}'를 대기열 0순위로 복구했습니다!")
+            gcs_state.save_gcs_state()
+            
+        # Auto Scale-out 연동: 유실된 노드를 대체하기 위해 스팟 노드 증설 요청
+        dashboard.log_event(f"[Lineage Recovery] 노드 이탈로 인한 대체 자원 Scale-Out 요청 트리거")
+        cluster_manager.scale_out_worker("spot_a")
 
     for wid in dead_workers:
         if wid == "worker-1":
@@ -105,10 +131,24 @@ def check_and_cleanup_dead_workers():
 def generate_mock_tasks():
     """시뮬레이터 부하 검증을 위해 주기적으로 랜덤 가상 태스크를 생성하여 큐에 적재합니다."""
     model_types = ["CNN", "RNN", "LSTM"]
-    if random.random() < 0.4:
-        num_new_tasks = random.randint(1, 2)
+    
+    # 버스티(Bursty) 태스크 유입 패턴 시뮬레이션
+    # 8%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
+    # 92%의 확률로는 5%의 매우 낮은 확률로만 단일 태스크 유입
+    is_burst = random.random() < 0.08
+    is_normal = not is_burst and (random.random() < 0.05)
+    
+    if is_burst:
+        num_new_tasks = random.randint(5, 8)
+        dashboard.log_event(f"⚡ [Burst Traffic Alert] 태스크 폭발 유입 발생! (신규: {num_new_tasks}개)")
+    elif is_normal:
+        num_new_tasks = 1
+    else:
+        num_new_tasks = 0
+        
+    if num_new_tasks > 0:
         with gcs_state.queue_lock:
-            if len(gcs_state.task_queue) < 15:
+            if len(gcs_state.task_queue) < 25:  # 버스트 수용을 위해 최대 큐 크기 상향
                 for _ in range(num_new_tasks):
                     gcs_state.task_counter += 1
                     task_id = f"task-{gcs_state.task_counter:04d}"
@@ -124,6 +164,7 @@ def generate_mock_tasks():
                         "enqueue_time": time.time()
                     })
                     dashboard.log_event(f"[Task 유입] {task_id} ({model}, {epochs} Epochs) 큐 적재 완료. (마감기한: {timeout}초 후)")
+                gcs_state.save_gcs_state()
 
 # --- 5. 백그라운드 스케줄러 핵심 루프 ---
 

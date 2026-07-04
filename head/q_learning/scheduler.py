@@ -16,21 +16,17 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
     """
     spot_scale = get_current_spot_scale()
     
-    # 1. 룰 기반 Scale-In 작동 보완 (유휴 감지 회수)
-    with gcs_state.queue_lock:
-        q_len_for_scale_in = len(gcs_state.task_queue)
-    if q_len_for_scale_in == 0:
-        with gcs_state.registry_lock:
-            active_workers = list(gcs_state.worker_registry.values())
-            avg_cpu = sum(info.get("cpu", 0.0) for info in active_workers) / len(active_workers) if active_workers else 0.0
-        if avg_cpu < 20.0:
-            empty_queue_duration += 1.0
-        else:
-            empty_queue_duration = 0.0
+    # 1. 룰 기반 Scale-In 작동 보완 (스팟 노드 유휴 시간 감지 회수)
+    with gcs_state.registry_lock:
+        idle_spot_a = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_a" and info["status"] == "IDLE")
+        idle_spot_b = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_b" and info["status"] == "IDLE")
+        
+    if idle_spot_a > 0 or idle_spot_b > 0:
+        empty_queue_duration += 1.0
     else:
         empty_queue_duration = 0.0
         
-    if empty_queue_duration >= 10.0 and spot_scale > 0:
+    if empty_queue_duration >= 3.0 and spot_scale > 0:
         # 비용 효율을 위해 가동 비용이 비싼 spot_a를 우선 회수하고 없으면 spot_b를 회수합니다.
         with gcs_state.registry_lock:
             has_spot_a = any(info["node_type"] == "spot_a" for info in gcs_state.worker_registry.values())
@@ -38,12 +34,12 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         
         if has_spot_a:
             if cluster_manager.scale_in_specific_worker("spot_a"):
-                dashboard.log_event("[Q-Learning Scale-In] 무부하 10초 유지로 인한 Spot-A 노드 안전 회수")
+                dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-A 노드 안전 회수")
                 spot_scale -= 1
                 empty_queue_duration = 0.0
         elif has_spot_b:
             if cluster_manager.scale_in_specific_worker("spot_b"):
-                dashboard.log_event("[Q-Learning Scale-In] 무부하 10초 유지로 인한 Spot-B 노드 안전 회수")
+                dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-B 노드 안전 회수")
                 spot_scale -= 1
                 empty_queue_duration = 0.0
 
@@ -156,14 +152,28 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             
         elif action == 4:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_A 트리거 -> Spot-A 노드 추가 증설")
-            if cluster_manager.scale_out_worker("spot_a"):
-                spot_scale += 1
+            if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
+                dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-A 2대 동시 증설")
+                if cluster_manager.scale_out_worker("spot_a"):
+                    spot_scale += 1
+                if cluster_manager.scale_out_worker("spot_a"):
+                    spot_scale += 1
+            else:
+                if cluster_manager.scale_out_worker("spot_a"):
+                    spot_scale += 1
             break
             
         elif action == 5:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_B 트리거 -> Spot-B 노드 추가 증설")
-            if cluster_manager.scale_out_worker("spot_b"):
-                spot_scale += 1
+            if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
+                dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-B 2대 동시 증설")
+                if cluster_manager.scale_out_worker("spot_b"):
+                    spot_scale += 1
+                if cluster_manager.scale_out_worker("spot_b"):
+                    spot_scale += 1
+            else:
+                if cluster_manager.scale_out_worker("spot_b"):
+                    spot_scale += 1
             break
             
     return empty_queue_duration

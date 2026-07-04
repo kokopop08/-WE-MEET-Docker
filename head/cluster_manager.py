@@ -47,27 +47,38 @@ def cleanup_zombie_containers():
     try:
         # Docker SDK에서 list()로 모든 컨테이너 목록을 리스트 객체
         containers = state.DOCKER_CLIENT.containers.list(all=True)
-        cleaned_count = 0 # 몇개를 제거했는지 기록
+        targets = []
         for container in containers:
             c_name = container.name
             # worker-1: on-demand / worker-2: spot-a / worker-3: spot-b
             if c_name.startswith("babyray-worker-2-") or c_name.startswith("babyray-worker-3-"):
-                dashboard.log_event(f"[Docker SDK] 잔존 컨테이너 감지 및 정리: {c_name}")
+                targets.append(container)
                 
-                try:
-                    container.stop(timeout=2)
-                except Exception:
-                    pass
-
-                # 컨테이너 중지 후 제거
-                try:
-                    container.remove(force=True)
-                    cleaned_count += 1 # 제거 성공 시 카운트 증가
+        if not targets:
+            dashboard.log_event("[Docker SDK] 정리할 잔존 컨테이너가 없습니다.")
+            return
+            
+        import threading
+        threads = []
+        
+        def remove_container(c):
+            try:
+                dashboard.log_event(f"[Docker SDK] 잔존 컨테이너 강제 제거 시작: {c.name}")
+                c.remove(force=True)
+                dashboard.log_event(f"[Docker SDK] 잔존 컨테이너 강제 제거 성공: {c.name}")
+            except Exception as e:
+                dashboard.log_event(f"[Docker SDK 에러] 컨테이너 {c.name} 제거 실패: {e}")
                 
-                except Exception as e:
-                    dashboard.log_event(f"[Docker SDK 에러] 컨테이너 {c_name} 제거 실패: {e}")
-        # for문이 끝나면 로그 출력
-        dashboard.log_event(f"[Docker SDK] 총 {cleaned_count}개의 잔존 컨테이너가 정리되었습니다.")
+        for container in targets:
+            t = threading.Thread(target=remove_container, args=(container,))
+            t.start()
+            threads.append(t)
+            
+        # 모든 정리 작업이 4초 내에 끝나지 않으면 메인 스레드 진행 (타임아웃 방지)
+        for t in threads:
+            t.join(timeout=4.0)
+            
+        dashboard.log_event(f"[Docker SDK] 총 {len(targets)}개의 잔존 컨테이너에 대해 강제 정리 명령을 병렬 전송했습니다.")
         
     except Exception as e:
         dashboard.log_event(f"[Docker SDK 에러] 잔존 컨테이너 조회 중 에러 발생: {e}")

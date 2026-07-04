@@ -94,12 +94,12 @@ class SimulatedCluster:
             })
             self.sla_total_count += 1
             
-        # Reduce 1개 생성
-        reduce_task_id = f"{job_id}-reduce"
+        # Merge 1개 생성
+        merge_task_id = f"{job_id}-merge"
         self.task_queue.append({
-            "task_id": reduce_task_id,
+            "task_id": merge_task_id,
             "job_id": job_id,
-            "model_type": "REDUCE",
+            "model_type": "MERGE",
             "epochs": 1,
             "deadline": deadline,
             "enqueue_time": time.time(),
@@ -132,6 +132,12 @@ class SimulatedCluster:
             ticks += 1
             self.total_sim_time += 1.0
             
+            # --- 실시간 구동 비용 차감 (상시 구동 청구 모델) ---
+            # On-Demand 노드 비용 청구 (매 초 0.1)
+            self.virtual_budget -= (360.0 / 3600.0)
+            # Spot-A 노드 가동 수량 비례 비용 청구 (대당 매 초 0.02)
+            self.virtual_budget -= self.worker_2_scale * (72.0 / 3600.0)
+            
             # --- A. 실행 중인 태스크들 1초 경과 모사 ---
             finished_workers = []
             for worker, t_info in list(self.running_tasks.items()):
@@ -153,10 +159,10 @@ class SimulatedCluster:
                     
                 exec_time = t_info["exec_time"]
                 
-                # 비용 차감
+                # 비용 차감 (실시간 초당 비용 모델 도입으로 완료 시 차감은 비활성화)
                 cost_per_hour = 360.0 if worker_type == "on_demand" else 72.0
                 task_cost = cost_per_hour * (exec_time / 3600.0)
-                self.virtual_budget -= task_cost
+                # self.virtual_budget -= task_cost
                 
                 # 상태 복구
                 if worker == "worker-1":
@@ -178,7 +184,7 @@ class SimulatedCluster:
                     if self.total_sim_time <= (task["deadline"] - time.time() + self.total_sim_time):
                         self.sla_success_count += 1
                         
-                    if task["model_type"] == "REDUCE":
+                    if task["model_type"] == "MERGE":
                         self.job_registry[task["job_id"]]["status"] = "SUCCESS"
                 else:
                     self.failure_count += 1
@@ -196,18 +202,24 @@ class SimulatedCluster:
             if self.mode == "static":
                 # 스케일아웃
                 q_len = len(self.task_queue)
-                if q_len >= 5 and self.worker_2_scale < 3:
+                if q_len >= 8 and self.worker_2_scale < 2:
+                    self.worker_2_scale += 2
+                    self.worker_2_status.extend(["IDLE", "IDLE"])
+                    self.worker_2_load.extend([10.0, 10.0])
+                elif q_len >= 4 and self.worker_2_scale < 3:
                     self.worker_2_scale += 1
                     self.worker_2_status.append("IDLE")
                     self.worker_2_load.append(10.0)
-                # 스케일인
-                if q_len == 0:
+                # 스케일인 (유휴 스팟 노드 감지 시)
+                has_idle_spot = any(s == "IDLE" for s in self.worker_2_status)
+                if has_idle_spot:
                     scale_in_timer += 1.0
-                    if scale_in_timer >= 10.0 and self.worker_2_scale > 0:
-                        self.worker_2_scale -= 1
-                        self.worker_2_status.pop()
-                        self.worker_2_load.pop()
-                        scale_in_timer = 0.0
+                    if scale_in_timer >= 3.0 and self.worker_2_scale > 0:
+                        if self.worker_2_status[-1] == "IDLE":
+                            self.worker_2_scale -= 1
+                            self.worker_2_status.pop()
+                            self.worker_2_load.pop()
+                            scale_in_timer = 0.0
                 else:
                     scale_in_timer = 0.0
                     
@@ -221,7 +233,7 @@ class SimulatedCluster:
                     if self.worker_1_status == "IDLE":
                         self.worker_1_status = "BUSY"
                         self.worker_1_load = 80.0
-                        exec_time = task["epochs"] * 3.0 if task["model_type"] != "REDUCE" else 2.0
+                        exec_time = task["epochs"] * 3.0 if task["model_type"] != "MERGE" else 2.0
                         self.running_tasks["worker-1"] = {"task": task, "remaining_time": exec_time, "exec_time": exec_time}
                         assigned = True
                     else:
@@ -229,7 +241,7 @@ class SimulatedCluster:
                             if self.worker_2_status[i] == "IDLE":
                                 self.worker_2_status[i] = "BUSY"
                                 self.worker_2_load[i] = 80.0
-                                exec_time = (task["epochs"] * 3.0 / 0.6) if task["model_type"] != "REDUCE" else 2.0
+                                exec_time = (task["epochs"] * 3.0 / 0.6) if task["model_type"] != "MERGE" else 2.0
                                 self.running_tasks[f"worker-2-{i+1}"] = {"task": task, "remaining_time": exec_time, "exec_time": exec_time}
                                 assigned = True
                                 break
@@ -242,17 +254,25 @@ class SimulatedCluster:
                 # 부하 기반 스케일링
                 active_loads = [self.worker_1_load] + self.worker_2_load
                 avg_load = sum(active_loads) / len(active_loads)
-                if avg_load > 70.0 and self.worker_2_scale < 3:
+                q_len = len(self.task_queue)
+                if q_len >= 8 and self.worker_2_scale < 2:
+                    self.worker_2_scale += 2
+                    self.worker_2_status.extend(["IDLE", "IDLE"])
+                    self.worker_2_load.extend([10.0, 10.0])
+                elif (avg_load > 70.0 or q_len >= 3) and self.worker_2_scale < 3:
                     self.worker_2_scale += 1
                     self.worker_2_status.append("IDLE")
                     self.worker_2_load.append(10.0)
-                if len(self.task_queue) == 0 and avg_load < 20.0:
+                # 스케일인 (유휴 스팟 노드 감지 시)
+                has_idle_spot = any(s == "IDLE" for s in self.worker_2_status)
+                if has_idle_spot:
                     scale_in_timer += 1.0
-                    if scale_in_timer >= 10.0 and self.worker_2_scale > 0:
-                        self.worker_2_scale -= 1
-                        self.worker_2_status.pop()
-                        self.worker_2_load.pop()
-                        scale_in_timer = 0.0
+                    if scale_in_timer >= 3.0 and self.worker_2_scale > 0:
+                        if self.worker_2_status[-1] == "IDLE":
+                            self.worker_2_scale -= 1
+                            self.worker_2_status.pop()
+                            self.worker_2_load.pop()
+                            scale_in_timer = 0.0
                 else:
                     scale_in_timer = 0.0
                     
@@ -276,7 +296,7 @@ class SimulatedCluster:
                         target_worker = idle_workers[0][0]
                         
                         exec_factor = 1.0 if target_worker == "worker-1" else 0.6
-                        exec_time = (task["epochs"] * 3.0 / exec_factor) if task["model_type"] != "REDUCE" else 2.0
+                        exec_time = (task["epochs"] * 3.0 / exec_factor) if task["model_type"] != "MERGE" else 2.0
                         
                         self.running_tasks[target_worker] = {"task": task, "remaining_time": exec_time, "exec_time": exec_time}
                         
@@ -294,30 +314,62 @@ class SimulatedCluster:
 
             # 3) Q-LEARNING SCHEDULER
             elif self.mode == "q_learning":
-                # 스케일인 감쇄
-                q_len = min(len(self.task_queue), 10)
-                if q_len == 0:
+                # 스케일인 감쇄 (유휴 스팟 노드 감지 시)
+                has_idle_spot = any(s == "IDLE" for s in self.worker_2_status)
+                if has_idle_spot:
                     scale_in_timer += 1.0
-                    if scale_in_timer >= 10.0 and self.worker_2_scale > 0:
-                        self.worker_2_scale -= 1
-                        self.worker_2_status.pop()
-                        self.worker_2_load.pop()
-                        scale_in_timer = 0.0
+                    if scale_in_timer >= 3.0 and self.worker_2_scale > 0:
+                        if self.worker_2_status[-1] == "IDLE":
+                            self.worker_2_scale -= 1
+                            self.worker_2_status.pop()
+                            self.worker_2_load.pop()
+                            scale_in_timer = 0.0
                 else:
                     scale_in_timer = 0.0
                     
-                w1_act = 1
-                w2_act = 1 if self.worker_2_scale > 0 else 0
-                active_bitmap = (w1_act * 1) + (w2_act * 2)
-                budget_level = 0 if self.virtual_budget < 20.0 else (1 if self.virtual_budget < 70.0 else 2)
-                state = (q_len, active_bitmap, budget_level)
+                # 4차원 상태(State) 산출
+                cnn_count = sum(1 for t in self.task_queue if t.get("model_type") == "CNN")
+                lstm_rnn_count = sum(1 for t in self.task_queue if t.get("model_type") in ["LSTM", "RNN"])
+                q_len_real = len(self.task_queue)
+                if q_len_real == 0:
+                    w_mix = 0
+                elif cnn_count > 0 and lstm_rnn_count == 0:
+                    w_mix = 1
+                elif lstm_rnn_count > 0 and cnn_count == 0:
+                    w_mix = 2
+                else:
+                    w_mix = 3
+
+                w1_idle = 1 if self.worker_1_status == "IDLE" else 0
+                w2_idle = 1 if any(s == "IDLE" for s in self.worker_2_status) else 0
+                w3_idle = 0
+                a_mix = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
+
+                u_sla = 0
+                peek_task = None
+                for task in self.task_queue:
+                    deps_met = True
+                    for dep in task.get("dependencies", []):
+                        if not self.completed_tasks_cache.get(dep, False):
+                            deps_met = False
+                            break
+                    if deps_met:
+                        peek_task = task
+                        break
+                if peek_task:
+                    time_left = peek_task["deadline"] - time.time()
+                    if time_left <= 30.0:
+                        u_sla = 1
+
+                b_avail = 0 if self.virtual_budget < 0.7 else 1
+                state = (w_mix, a_mix, u_sla, b_avail)
                 
                 while True:
                     q_len_real = len(self.task_queue)
                     if q_len_real == 0:
                         break
                         
-                    available_actions = [2]  # HOLD
+                    available_actions = [3]  # HOLD (3)
                     peek_task = self._get_runnable_task()
                     
                     if peek_task:
@@ -328,15 +380,15 @@ class SimulatedCluster:
                             available_actions.append(1)
                             
                     if self.worker_2_scale < 3:
-                        available_actions.append(3)
+                        available_actions.append(4)  # SCALE_OUT_SPOT_A (4)
                         
                     if self.virtual_budget <= 0.0:
                         if 0 in available_actions and 1 in available_actions:
                             available_actions.remove(0)
-                        if 3 in available_actions:
-                            available_actions.remove(3)
+                        if 4 in available_actions:
+                            available_actions.remove(4)
                             
-                    if available_actions == [2]:
+                    if available_actions == [3]:
                         break
                         
                     action = self.agent.choose_action(state, available_actions)
@@ -349,14 +401,14 @@ class SimulatedCluster:
                         assigned = False
                         if action == 0 and self.worker_1_status == "IDLE":
                             self.worker_1_status = "BUSY"
-                            exec_time = target_task["epochs"] * 3.0 if target_task["model_type"] != "REDUCE" else 2.0
+                            exec_time = target_task["epochs"] * 3.0 if target_task["model_type"] != "MERGE" else 2.0
                             self.running_tasks["worker-1"] = {"task": target_task, "remaining_time": exec_time, "exec_time": exec_time}
                             assigned = True
                         elif action == 1:
                             for i in range(self.worker_2_scale):
                                 if self.worker_2_status[i] == "IDLE":
                                     self.worker_2_status[i] = "BUSY"
-                                    exec_time = (target_task["epochs"] * 3.0 / 0.6) if target_task["model_type"] != "REDUCE" else 2.0
+                                    exec_time = (target_task["epochs"] * 3.0 / 0.6) if target_task["model_type"] != "MERGE" else 2.0
                                     self.running_tasks[f"worker-2-{i+1}"] = {"task": target_task, "remaining_time": exec_time, "exec_time": exec_time}
                                     assigned = True
                                     break
@@ -365,12 +417,17 @@ class SimulatedCluster:
                             self.task_queue.insert(0, target_task)
                             break
                             
-                    elif action == 2:  # HOLD
+                    elif action == 3:  # HOLD
                         break
-                    elif action == 3:  # SCALE_OUT
-                        self.worker_2_scale += 1
-                        self.worker_2_status.append("IDLE")
-                        self.worker_2_load.append(10.0)
+                    elif action == 4:  # SCALE_OUT
+                        if q_len_real >= 6 and self.worker_2_scale < 2:
+                            self.worker_2_scale += 2
+                            self.worker_2_status.extend(["IDLE", "IDLE"])
+                            self.worker_2_load.extend([10.0, 10.0])
+                        else:
+                            self.worker_2_scale += 1
+                            self.worker_2_status.append("IDLE")
+                            self.worker_2_load.append(10.0)
                         break
 
         return {

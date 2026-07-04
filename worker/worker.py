@@ -16,7 +16,7 @@ from proto import babyray_pb2
 from proto import babyray_pb2_grpc
 from common.config import DEFAULT_HEARTBEAT_INTERVAL # 하트비트 전송 주기 - 가져옴 (파일에서 미리 정의)
 
-# 분리된 GPU 시뮬레이터 모듈에서 실행기를 가져옵니다.
+# 분리된 GPU 시뮬레이터 모듈에서 실행기를 가져옴
 from gpu_simulator import PyTorchTaskRunner
 
 # 표준 출력 버퍼 비우기 (Flush) 설정

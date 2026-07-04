@@ -1,8 +1,9 @@
 import time
-import random
+import random # 무작위 확률 생성 -> 이후에 변경할 예정
 import os
 
 # 표준 출력 버퍼 비우기 (Flush) 설정
+# 백그라운드나 컨테이너 환경에서 로그가 즉시 출력되도록 보장합니다.
 import builtins
 _original_print = builtins.print
 def print(*args, **kwargs):
@@ -10,7 +11,7 @@ def print(*args, **kwargs):
     _original_print(*args, **kwargs)
 builtins.print = print
 
-# 가상 OOM 시뮬레이션 플래그
+# 가상 OOM 시뮬레이션 플래그 (메모리 부족)
 oom_simulated = False 
 
 # 분리된 신경망 연산 및 추론 모듈 로드 (worker.models)
@@ -21,6 +22,7 @@ from worker.models import (
     RNNModel,
     LSTMModel
 )
+#pytorch 라이브러리가 사용 가능한 경우 import
 if HAS_TORCH:
     import torch 
     import torch.nn as nn
@@ -113,7 +115,7 @@ class PyTorchTaskRunner:
         self.epochs = epochs
         self.worker_type = worker_type
         self.dataset_path = dataset_path
-        self.task = get_task_by_type(model_type)
+        self.task = get_task_by_type(model_type) # 모델 타입에 맞는 태스크 객체 획득
         
         type_factors = {
             "on_demand": 1.0,
@@ -130,6 +132,7 @@ class PyTorchTaskRunner:
     def _check_oom_trigger(self):
         """OOM 예외 유입 조건 감지 및 가상 실패 처리"""
         is_oom_trigger = False
+        # LSTM 모델이면서 8%의 확률에 걸리거나, 태스크 ID에 'fail' 단어가 포함되어 있으면 가상 OOM 발동
         if self.model_type.upper() == "LSTM" and random.random() < 0.08:
             is_oom_trigger = True
         elif "fail" in self.task_id.lower():
@@ -149,14 +152,17 @@ class PyTorchTaskRunner:
         """REDUCE(FedAvg) 가중치 병합 및 교차 추론 검증"""
         print(f"[Worker Task] 가중치 FedAvg 병합 연산 수행: {self.task_id}")
         try:
+            # dataset_path 스트링 내에 "merge:경로1,경로2" 형태로 들어오는 파일 분석
             paths_str = self.dataset_path.split("merge:")[1]
             file_paths = [p.strip() for p in paths_str.split(",") if p.strip()]
             
+            # 실제로 디스크에 존재하는 유효한 체크포인트 파일들만 필터링
             valid_paths = [p for p in file_paths if os.path.exists(p)]
             if not valid_paths:
                 raise FileNotFoundError(f"[FedAvg Error] 병합할 유효한 가중치 파일(.pt)이 디바이스상에 하나도 존재하지 않습니다. (요청 리스트: {file_paths})")
             
             print(f"[Worker Task] 유효 파일 스캔 완료: {len(valid_paths)}/{len(file_paths)} 대 병합 진행")
+            # 파일들로부터 가중치 state_dict 로드
             state_dicts = [torch.load(p, map_location="cpu") for p in valid_paths]
             averaged_sd = {}
             
@@ -234,7 +240,7 @@ class PyTorchTaskRunner:
         """모델 및 옵티마이저 초기화 및 체크포인트 로드"""
         model = None
         optimizer = None
-        criterion = None
+        criterion = None 
         
         if HAS_TORCH and self.task:
             try:

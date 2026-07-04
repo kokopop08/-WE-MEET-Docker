@@ -30,7 +30,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
     """
     [Task 실행 및 강화학습 피드백 스레드 (공통 유틸리티)]
     특정 워커에 작업을 할당하여 gRPC로 실행 지시를 내리고 완료 모니터링 후 보상(Reward)을 계산하여 Q-Table을 갱신합니다.
-    epochs 가 8 이상이고 가용 IDLE 노드가 2대 이상일 경우 병렬 Map-Reduce 연산으로 확장 분할 구동합니다.
+    epochs 가 8 이상이고 가용 IDLE 노드가 2대 이상일 경우 병렬 Map-Merge 연산으로 확장 분할 구동합니다.
     """
     ip = worker_info['ip']
     worker_address = f"[{ip}]:{worker_info['port']}" if ":" in ip else f"{ip}:{worker_info['port']}"
@@ -66,7 +66,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             # 백그라운드 연산 도중 스케줄러가 다른 일반 작업을 새롭게 할당하는 것을 원천 차단합니다.
             pass
 
-            dashboard.log_event(f"[Map-Reduce] {task_id} 병렬 학습 분할 개시. 가용 IDLE 워커 수: {len(available_idle_workers)}")
+            dashboard.log_event(f"[Map-Merge] {task_id} 병렬 학습 분할 개시. 가용 IDLE 워커 수: {len(available_idle_workers)}")
             
             # 1. 쪼갤 대수 결정 (최대 3분할)
             num_splits = min(len(available_idle_workers), 3)
@@ -78,10 +78,53 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             def execute_map_subtask(sub_idx, w_id, w_info):
                 sub_task_id = f"{task_id}-map-{sub_idx}"
                 sub_ep = sub_epochs + (remainder if sub_idx == 0 else 0)
+                
+                # 1. Skip-Execution 검사: 이미 최종 가중치 파일이 성공적으로 존재하면 즉시 스킵
+                final_pt = f"data/final_{sub_task_id}.pt"
+                if os.path.exists(final_pt) and os.path.getsize(final_pt) > 0:
+                    dashboard.log_event(f"[Map Skip] 서브맵 {sub_task_id} 이미 완료됨 -> 학습 Skip-Execution 처리.")
+                    inf_log = f"[{model_type} Inference/Forecast/Generation Done] (Skip-Execution 복구본)"
+                    map_results[sub_idx] = {
+                        "success": True,
+                        "worker_id": w_id,
+                        "worker_type": w_info["node_type"],
+                        "execution_time": 0.0,
+                        "output_file": final_pt,
+                        "inference_log": inf_log
+                    }
+                    with gcs_state.registry_lock:
+                        if sub_task_id in gcs_state.task_lineage:
+                            gcs_state.task_lineage[sub_task_id]["status"] = "SUCCESS"
+                        if w_id in gcs_state.worker_registry:
+                            if w_id != worker_id:
+                                gcs_state.worker_registry[w_id]["status"] = "IDLE"
+                    gcs_state.save_gcs_state()
+                    return
+
+                # 2. Re-execution 검사: 중간 체크포인트가 존재하면 로드 및 남은 에포크만 이어서 실행
+                last_epoch = 0
+                checkpoint_file = None
+                for ep in range(sub_ep, 0, -1):
+                    chk_path = f"data/checkpoint_{sub_task_id}_epoch_{ep}.pt"
+                    if os.path.exists(chk_path):
+                        last_epoch = ep
+                        checkpoint_file = chk_path
+                        break
+
+                actual_ep = sub_ep
+                sub_dataset_path = task.get("dataset_path", f"data/{model_type.lower()}_dataset.pt")
+                if task.get("dataset_path", "").endswith(".pt"):
+                    sub_dataset_path = task["dataset_path"]
+
+                if last_epoch > 0 and last_epoch < sub_ep:
+                    actual_ep = sub_ep - last_epoch
+                    sub_dataset_path = checkpoint_file
+                    dashboard.log_event(f"[장애 복구] 서브맵 {sub_task_id} 중단 감지 -> {last_epoch} Epoch 가중치를 기반으로 이어서 학습 복구(남은 {actual_ep} Epochs) 시작.")
+
                 sub_ip = w_info['ip']
                 sub_address = f"[{sub_ip}]:{w_info['port']}" if ":" in sub_ip else f"{sub_ip}:{w_info['port']}"
                 
-                dashboard.log_event(f"[Map Task] 서브맵 할당: {sub_task_id} ({model_type}, {sub_ep} Ep) -> 워커 {w_id}")
+                dashboard.log_event(f"[Map Task] 서브맵 할당: {sub_task_id} ({model_type}, {actual_ep} Ep) -> 워커 {w_id}")
                 
                 sub_success = False
                 sub_start = time.time()
@@ -90,15 +133,11 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     sub_channel = grpc.insecure_channel(sub_address)
                     sub_stub = babyray_pb2_grpc.BabyRayServiceStub(sub_channel)
                     
-                    sub_dataset_path = task.get("dataset_path", f"data/{model_type.lower()}_dataset.pt")
-                    if task.get("dataset_path", "").endswith(".pt"):
-                        sub_dataset_path = task["dataset_path"]
-                    
                     res = sub_stub.AssignTask(babyray_pb2.TaskAssignment(
                         task_id=sub_task_id,
                         model_type=model_type,
                         dataset_path=sub_dataset_path,
-                        epochs=sub_ep
+                        epochs=actual_ep
                     ))
                     
                     if res.status == "RUNNING":
@@ -120,12 +159,14 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                 with gcs_state.registry_lock:
                                     if sub_task_id in gcs_state.task_lineage:
                                         gcs_state.task_lineage[sub_task_id]["status"] = "SUCCESS"
+                                gcs_state.save_gcs_state()
                                 break
                             elif stat.status == "FAILED":
                                 sub_success = False
                                 with gcs_state.registry_lock:
                                     if sub_task_id in gcs_state.task_lineage:
                                         gcs_state.task_lineage[sub_task_id]["status"] = "FAILED"
+                                gcs_state.save_gcs_state()
                                 break
                 except Exception as ex:
                     dashboard.log_event(f"[Map Task 에러] 서브맵 {sub_task_id} (워커 {w_id}) 실패: {ex}")
@@ -133,6 +174,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     with gcs_state.registry_lock:
                         if sub_task_id in gcs_state.task_lineage:
                             gcs_state.task_lineage[sub_task_id]["status"] = "FAILED"
+                    gcs_state.save_gcs_state()
                 finally:
                     with gcs_state.registry_lock:
                         if w_id in gcs_state.worker_registry:
@@ -159,7 +201,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     all_maps_success = True
                     break
                 
-                dashboard.log_event(f"[Map-Reduce] {task_id} 시도 {attempt+1}/{max_retries} | 미완료 맵 서브태스크: {pending_indices}")
+                dashboard.log_event(f"[Map-Merge] {task_id} 시도 {attempt+1}/{max_retries} | 미완료 맵 서브태스크: {pending_indices}")
                 
                 # 매 시도마다 실시간 가용 IDLE 워커 재수집
                 with gcs_state.registry_lock:
@@ -199,6 +241,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                             "status": "RUNNING",
                             "dataset_path": task.get("dataset_path", "")
                         }
+                    gcs_state.save_gcs_state()
                     
                     t = threading.Thread(target=execute_map_subtask, args=(sub_idx, wid, winfo))
                     t.start()
@@ -211,13 +254,13 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 all_maps_success = len(map_results) == num_splits and all(r["success"] for r in map_results.values())
             
             if not all_maps_success:
-                dashboard.log_event(f"[Map-Reduce] 경고: 최대 재시도 한도 초과로 일부 맵 태스크가 최종 실패했습니다. 복구 복구 루프 재진입.")
+                dashboard.log_event(f"[Map-Merge] 경고: 최대 재시도 한도 초과로 일부 맵 태스크가 최종 실패했습니다. 복구 복구 루프 재진입.")
                 success = False
                 execution_time = time.time() - start_time
             else:
                 merge_files = [r["output_file"] for r in map_results.values()]
                 merge_dataset_path = f"merge:" + ",".join(merge_files)
-                reduce_task_id = f"{task_id}-reduce"
+                reduce_task_id = f"{task_id}-merge"
                 
                 with gcs_state.registry_lock:
                     reduce_candidates = [
@@ -247,23 +290,23 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                 reduce_worker_id, reduce_worker_info = on_demand_candidates[0]
                                 gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
                                 break
-                        dashboard.log_event(f"[Reduce Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중...")
+                        dashboard.log_event(f"[Merge Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중...")
                         time.sleep(1.0)
                 
                 if reduce_worker_id:
-                            
+                    r_stat = None
                     reduce_success = False
                     reduce_ip = reduce_worker_info['ip']
                     reduce_address = f"[{reduce_ip}]:{reduce_worker_info['port']}" if ":" in reduce_ip else f"{reduce_ip}:{reduce_worker_info['port']}"
                     
-                    dashboard.log_event(f"[Reduce Task] 병합 가중치 생성 트리거: {reduce_task_id} -> 워커 {reduce_worker_id}")
+                    dashboard.log_event(f"[Merge Task] 병합 가중치 생성 트리거: {reduce_task_id} -> 워커 {reduce_worker_id}")
                     try:
                         r_channel = grpc.insecure_channel(reduce_address)
                         r_stub = babyray_pb2_grpc.BabyRayServiceStub(r_channel)
                         
                         r_res = r_stub.AssignTask(babyray_pb2.TaskAssignment(
                             task_id=task_id,
-                            model_type="REDUCE",
+                            model_type="MERGE",
                             dataset_path=merge_dataset_path,
                             epochs=1
                         ))
@@ -287,7 +330,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                     reduce_success = False
                                     break
                     except Exception as rex:
-                        dashboard.log_event(f"[Reduce Task 에러] FedAvg 병합 실패: {rex}")
+                        dashboard.log_event(f"[Merge Task 에러] FedAvg 병합 실패: {rex}")
                         reduce_success = False
                     finally:
                         with gcs_state.registry_lock:
@@ -297,53 +340,64 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     success = reduce_success
                     execution_time = time.time() - start_time
                     if success:
-                        dashboard.log_event(f"[Map-Reduce] {task_id} 최종 Map-Reduce FedAvg 병합 성공! (총 시간: {execution_time:.2f}초)")
+                        dashboard.log_event(f"[Map-Merge] {task_id} 최종 Map-Merge FedAvg 병합 성공! (총 시간: {execution_time:.2f}초)")
                         
                         # --- 최종 결론 도출 및 결합 로직 ---
                         try:
                             import re
                             merged_conclusion = ""
-                            logs_to_merge = [r.get("inference_log") for r in map_results.values() if r and r.get("inference_log")]
                             
-                            if model_type.upper() == "CNN":
-                                classes = []
-                                confs = []
-                                for log in logs_to_merge:
-                                    m = re.search(r"예측 클래스:\s*(\d+)\s*\(신뢰도:\s*([\d.]+)%\)", log)
-                                    if m:
-                                        classes.append(int(m.group(1)))
-                                        confs.append(float(m.group(2)))
-                                if classes:
-                                    from collections import Counter
-                                    majority_class = Counter(classes).most_common(1)[0][0]
-                                    avg_conf = sum(confs) / len(confs)
-                                    merged_conclusion = f"[CNN 분산 병합 결론] 다수결 이미지 분석 결과 -> 최종 예측 클래스: {majority_class} (평균 신뢰도: {avg_conf:.2f}%)"
-                                    
-                            elif model_type.upper() == "RNN":
-                                all_forecasts = []
-                                for log in logs_to_merge:
-                                    m = re.search(r"예측값\s*->\s*\[(.*?)\]", log)
-                                    if m:
-                                        vals = [float(v.strip()) for v in m.group(1).split(",")]
-                                        all_forecasts.append(vals)
-                                if all_forecasts:
-                                    steps = len(all_forecasts[0])
-                                    avg_forecasts = []
-                                    for step in range(steps):
-                                        step_vals = [f[step] for f in all_forecasts if len(f) > step]
-                                        avg_forecasts.append(sum(step_vals) / len(step_vals))
-                                    avg_forecasts_str = ", ".join([f"{v:.3f}" for v in avg_forecasts])
-                                    merged_conclusion = f"[RNN 분산 병합 결론] 예측 수치 FedAvg 평균값 -> [{avg_forecasts_str}]"
-                                    
-                            elif model_type.upper() == "LSTM":
-                                text_fragments = []
-                                for log in logs_to_merge:
-                                    m = re.search(r"텍스트 생성 결과\s*->\s*\"(.*?)\"", log)
-                                    if m:
-                                        text_fragments.append(m.group(1))
-                                if text_fragments:
-                                    joined_text = " | ".join(text_fragments)
-                                    merged_conclusion = f"[LSTM 분산 병합 결론] 이종 분할 텍스트 병합 -> \"{joined_text}\""
+                            # REDUCE/MERGE 워커 로그에서 [FedAvg Verification] 라인을 직접 추출하여 최종 결론으로 사용
+                            if r_stat and r_stat.logs:
+                                for line in r_stat.logs.splitlines():
+                                    if "[FedAvg Verification]" in line:
+                                        verification_content = line.split("[FedAvg Verification]")[-1].strip()
+                                        merged_conclusion = f"[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> {verification_content}"
+                                        break
+                                        
+                            # 만약 로그에서 추출하지 못했다면 Fallback으로 기존의 개별 맵 결과 병합 로직 사용
+                            if not merged_conclusion:
+                                logs_to_merge = [r.get("inference_log") for r in map_results.values() if r and r.get("inference_log")]
+                                
+                                if model_type.upper() == "CNN":
+                                    classes = []
+                                    confs = []
+                                    for log in logs_to_merge:
+                                        m = re.search(r"예측 클래스:\s*(\d+)\s*\(신뢰도:\s*([\d.]+)%\)", log)
+                                        if m:
+                                            classes.append(int(m.group(1)))
+                                            confs.append(float(m.group(2)))
+                                    if classes:
+                                        from collections import Counter
+                                        majority_class = Counter(classes).most_common(1)[0][0]
+                                        avg_conf = sum(confs) / len(confs)
+                                        merged_conclusion = f"[CNN 분산 병합 결론] 다수결 이미지 분석 결과 -> 최종 예측 클래스: {majority_class} (평균 신뢰도: {avg_conf:.2f}%)"
+                                        
+                                elif model_type.upper() == "RNN":
+                                    all_forecasts = []
+                                    for log in logs_to_merge:
+                                        m = re.search(r"예측값\s*->\s*\[(.*?)\]", log)
+                                        if m:
+                                            vals = [float(v.strip()) for v in m.group(1).split(",")]
+                                            all_forecasts.append(vals)
+                                    if all_forecasts:
+                                        steps = len(all_forecasts[0])
+                                        avg_forecasts = []
+                                        for step in range(steps):
+                                            step_vals = [f[step] for f in all_forecasts if len(f) > step]
+                                            avg_forecasts.append(sum(step_vals) / len(step_vals))
+                                        avg_forecasts_str = ", ".join([f"{v:.3f}" for v in avg_forecasts])
+                                        merged_conclusion = f"[RNN 분산 병합 결론] 예측 수치 FedAvg 평균값 -> [{avg_forecasts_str}]"
+                                        
+                                elif model_type.upper() == "LSTM":
+                                    text_fragments = []
+                                    for log in logs_to_merge:
+                                        m = re.search(r"텍스트 생성 결과\s*->\s*\"(.*?)\"", log)
+                                        if m:
+                                            text_fragments.append(m.group(1))
+                                    if text_fragments:
+                                        joined_text = " | ".join(text_fragments)
+                                        merged_conclusion = f"[LSTM 분산 병합 결론] 이종 분할 텍스트 병합 -> \"{joined_text}\""
                                     
                             if merged_conclusion:
                                 dashboard.log_event(f"[Conclusion Engine] {merged_conclusion}")
@@ -363,28 +417,40 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                 if lineage_info and lineage_info.get("parent") == task_id:
                                     if sub_id in gcs_state.task_lineage:
                                         del gcs_state.task_lineage[sub_id]
+                        gcs_state.save_gcs_state()
                                     
                         # 2. 중간 맵 가중치 파일 (.pt) 즉각 소거 (WSL2/도커 공간 누수 방지)
                         for f_path in merge_files:
                             try:
                                 if os.path.exists(f_path):
                                     os.remove(f_path)
-                                    dashboard.log_event(f"[Reduce Cleanup] 임시 맵 가중치 파일 소거 완료: {f_path}")
+                                    dashboard.log_event(f"[Merge Cleanup] 임시 맵 가중치 파일 소거 완료: {f_path}")
                             except Exception as cleanup_err:
-                                dashboard.log_event(f"[Reduce Cleanup 경고] 파일 {f_path} 소거 중 오류: {cleanup_err}")
+                                dashboard.log_event(f"[Merge Cleanup 경고] 파일 {f_path} 소거 중 오류: {cleanup_err}")
+                                
+                        # 2-1. 중간 맵 체크포인트 가중치 파일 (.pt) 즉각 소거
+                        import glob
+                        map_checkpoints = glob.glob(f"data/checkpoint_{task_id}-map-*_epoch_*.pt")
+                        for cp_path in map_checkpoints:
+                            try:
+                                if os.path.exists(cp_path):
+                                    os.remove(cp_path)
+                                    dashboard.log_event(f"[Merge Cleanup] 임시 맵 체크포인트 파일 소거 완료: {cp_path}")
+                            except Exception as cleanup_err:
+                                dashboard.log_event(f"[Merge Cleanup 경고] 파일 {cp_path} 소거 중 오류: {cleanup_err}")
                                 
                         # 3. 최종 병합된 가중치 파일 (.pt) 즉각 소거 (WSL2/도커 공간 누수 방지)
                         final_merged_path = f"data/final_{task_id}.pt"
                         try:
                             if os.path.exists(final_merged_path):
                                 os.remove(final_merged_path)
-                                dashboard.log_event(f"[Reduce Cleanup] 최종 병합 가중치 파일 소거 완료: {final_merged_path}")
+                                dashboard.log_event(f"[Merge Cleanup] 최종 병합 가중치 파일 소거 완료: {final_merged_path}")
                         except Exception as cleanup_err:
-                            dashboard.log_event(f"[Reduce Cleanup 경고] 최종 병합 파일 {final_merged_path} 소거 중 오류: {cleanup_err}")
+                            dashboard.log_event(f"[Merge Cleanup 경고] 최종 병합 파일 {final_merged_path} 소거 중 오류: {cleanup_err}")
                     else:
-                        dashboard.log_event(f"[Map-Reduce] {task_id} Reduce 병합 단계 실패.")
+                        dashboard.log_event(f"[Map-Merge] {task_id} Merge 병합 단계 실패.")
                 else:
-                    dashboard.log_event(f"[Reduce Task 에러] 병합을 맡길 가용 워커가 존재하지 않습니다. 실패 처리.")
+                    dashboard.log_event(f"[Merge Task 에러] 병합을 맡길 가용 워커가 존재하지 않습니다. 실패 처리.")
                     success = False
                     execution_time = time.time() - start_time
         
@@ -395,7 +461,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             
             # [아키텍처 선택: 파일 기반 통신 및 복잡도 절충]
             dataset_path = task.get("dataset_path", f"data/{model_type.lower()}_dataset.pt")
-            if model_type.upper() == "REDUCE":
+            if model_type.upper() == "MERGE":
                 job_id = task.get("job_id", "")
                 dataset_path = f"merge:data/final_{job_id}-map-1.pt,data/final_{job_id}-map-2.pt,data/final_{job_id}-map-3.pt"
                 
@@ -444,6 +510,17 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                 dashboard.log_event(f"[Task Cleanup] 최종 가중치 파일 소거 완료: {final_task_path}")
                         except Exception as cleanup_err:
                             dashboard.log_event(f"[Task Cleanup 경고] 파일 {final_task_path} 소거 중 오류: {cleanup_err}")
+
+                        # 일반 태스크 중간 체크포인트 가중치 파일 소거 (공간 절약)
+                        import glob
+                        task_checkpoints = glob.glob(f"data/checkpoint_{task_id}_epoch_*.pt")
+                        for cp_path in task_checkpoints:
+                            try:
+                                if os.path.exists(cp_path):
+                                    os.remove(cp_path)
+                                    dashboard.log_event(f"[Task Cleanup] 체크포인트 파일 소거 완료: {cp_path}")
+                            except Exception as cleanup_err:
+                                dashboard.log_event(f"[Task Cleanup 경고] 파일 {cp_path} 소거 중 오류: {cleanup_err}")
                             
                         break
                     elif status_res.status == "FAILED":
@@ -463,18 +540,26 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
         with gcs_state.registry_lock:
             if worker_id in gcs_state.worker_registry:
                 gcs_state.worker_registry[worker_id]["status"] = "IDLE"
+            
+            # GCS 전역 작업 상태 정보 업데이트 및 상태 영속 파일로 저장
+            if success:
+                gcs_state.completed_tasks_cache[task_id] = True
+                gcs_state.task_status[task_id] = "SUCCESS"
+            else:
+                gcs_state.task_status[task_id] = "FAILED"
+        gcs_state.save_gcs_state()
                 
         # --- Q-Learning 보상 산출 및 Q-Table 업데이트 피드백 단계 ---
         end_time = time.time()
         delay_time = max(0.0, end_time - task["deadline"])
         deadline_exceeded = end_time > task["deadline"]
         
-        # 가상 예산 차감
+        # 가상 예산 차감 (실시간 초당 비용 모델 도입으로 완료 시 차감은 비활성화합니다)
         worker_type = worker_info["node_type"]
         cost_profile = agent.nodes_config.get(worker_type, {"cost_per_hour": 0.0})
         cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
         task_cost = cost_per_hour * (execution_time / 3600.0)
-        gcs_state.virtual_budget -= task_cost
+        # gcs_state.virtual_budget -= task_cost
         
         if gcs_state.SCHEDULER_MODE == "q_learning" and state is not None and action is not None:
             # 동시 기동 중이던 이종 모형 분석 (Co-scheduling 평가용)
@@ -563,3 +648,4 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 
             with gcs_state.queue_lock:
                 gcs_state.task_queue.insert(0, task)
+            gcs_state.save_gcs_state()

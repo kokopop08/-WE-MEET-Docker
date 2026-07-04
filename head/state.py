@@ -55,3 +55,66 @@ except Exception as e:
     DOCKER_CLIENT = None
     print(f"[Docker SDK 경고] 도커 데몬 연결 실패 (예외 안전 모드 가동): {e}")
 
+# --- GCS 상태 영속 저장 및 복구 함수 ---
+import json
+import os
+
+STATE_FILE = "data/gcs_state.json"
+
+def save_gcs_state():
+    """GCS 상태 변수들을 data/gcs_state.json 파일로 영속 보존합니다."""
+    with registry_lock:
+        with queue_lock:
+            state_data = {
+                "task_queue": task_queue,
+                "task_status": task_status,
+                "completed_tasks_cache": completed_tasks_cache,
+                "task_lineage": task_lineage,
+                "virtual_budget": virtual_budget,
+                "task_counter": task_counter,
+                "latest_conclusions": latest_conclusions
+            }
+            try:
+                os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+                with open(STATE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(state_data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[GCS State 경고] 상태 영속화 저장 실패: {e}")
+
+def load_gcs_state():
+    """GCS 상태 파일이 존재하면 읽어와서 메모리 상태를 복구합니다."""
+    global task_queue, task_status, completed_tasks_cache, task_lineage, virtual_budget, task_counter, latest_conclusions
+    if not os.path.exists(STATE_FILE):
+        return False
+    
+    with registry_lock:
+        with queue_lock:
+            try:
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    state_data = json.load(f)
+                
+                # 값 복원
+                task_queue.clear()
+                task_queue.extend(state_data.get("task_queue", []))
+                
+                task_status.clear()
+                task_status.update(state_data.get("task_status", {}))
+                
+                completed_tasks_cache.clear()
+                completed_tasks_cache.update(state_data.get("completed_tasks_cache", {}))
+                
+                task_lineage.clear()
+                task_lineage.update(state_data.get("task_lineage", {}))
+                
+                virtual_budget = state_data.get("virtual_budget", virtual_budget)
+                task_counter = state_data.get("task_counter", task_counter)
+                
+                latest_conclusions.clear()
+                latest_conclusions.extend(state_data.get("latest_conclusions", []))
+                
+                print(f"[GCS State] 상태 복구 완료. 대기 큐: {len(task_queue)}개, 캐시: {len(completed_tasks_cache)}개, Lineage: {len(task_lineage)}개, 예산: ${virtual_budget:.4f}달러")
+                return True
+            except Exception as e:
+                print(f"[GCS State 경고] 상태 복구 실패 (파일을 로드하지 않고 빈 상태로 기동): {e}")
+                return False
+

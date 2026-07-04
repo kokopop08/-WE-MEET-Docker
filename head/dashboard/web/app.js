@@ -281,15 +281,15 @@ async function updateDashboard() {
                 if (secondsLeft < 12) barColor = "orange";
                 if (secondsLeft < 5 || isOverdue) barColor = "var(--accent-red)";
 
-                // Map-Reduce 특수 서브태스크 배지 시각화
+                // Map-Merge 특수 서브태스크 배지 시각화
                 let modelBadgeClass = "task-model-badge";
                 let modelText = task.model_type;
                 if (task.task_id.includes("-map-")) {
                     modelBadgeClass += " badge-purple";
                     modelText += " (MAP)";
-                } else if (task.task_id.includes("-reduce")) {
+                } else if (task.task_id.includes("-merge")) {
                     modelBadgeClass += " badge-blue";
-                    modelText += " (REDUCE)";
+                    modelText += " (MERGE)";
                 }
 
                 html += `

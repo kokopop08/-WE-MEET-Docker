@@ -4,8 +4,8 @@ import torch.nn as nn
 from worker.models.base import BaseTask
 
 # CNN 학습 하이퍼파라미터
-CNN_BATCH_SIZE = 4
-CNN_NUM_BATCHES = 3
+CNN_BATCH_SIZE = 10
+CNN_NUM_BATCHES = 4
 CNN_IMAGE_SIZE = 28
 CNN_NUM_CLASSES = 10
 
