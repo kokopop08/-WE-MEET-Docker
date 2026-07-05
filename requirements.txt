@@ -1,24 +1,21 @@
 # ==============================================================================
-# Baby Ray 분산 시스템 개발용 Python 의존성 패키지 (requirements.txt)
+# Baby Ray Distributed Runtime Python Dependencies (requirements.txt)
 # ==============================================================================
 
-# 1. gRPC 통신망 구축용 (사전 컴파일된 프로토 파일 사용하므로 컴파일러 도구 불필요)
+# 1. gRPC Communication
 grpcio>=1.60.0
 grpcio-tools>=1.60.0
 
-# 2. Worker 노드 자원(CPU, Memory) 실시간 모니터링 및 Docker SDK 제어용
+# 2. Resource Monitoring & Docker Control
 psutil>=5.9.0
 docker>=7.0.0
 pyyaml>=6.0
 
-
-
-# 3. 데이터 핸들링 및 AI 벤치마크 테스트 성능 시각화용
+# 3. Data Handling & Performance Visualization
 pandas>=2.0.0
 matplotlib>=3.8.0
 numpy>=1.26.0
 
-# 4. PyTorch (AI 연산 워크로드 구동용)
-# Docker 컨테이너 내부에서는 'pytorch/pytorch' CUDA 베이스 이미지를 사용할 경우
-# PyTorch가 이미 내장되어 있으므로 따로 빌드할 필요가 없음
+# 4. PyTorch (Included in pytorch base image, but listed for local env dev)
 torch
+

@@ -1,136 +1,118 @@
-# Head Node 기술 명세서: 분산 제어, GCS 레지스트리 및 스케줄러
+# Head Node 기술 명세서: 분산 제어, GCS 레지스트리 및 패키지 아키텍처
 
-이 문서는 Baby Ray 분산 컴퓨팅 시스템의 중앙 통제 역할을 수행하는 **Head Node**의 아키텍처, 데이터 구조, gRPC 서버 명세 및 스케줄링 메커니즘을 정의한 기술 명세서입니다.
+이 문서는 Baby Ray 분산 시스템의 통제 역할을 수행하는 **Head Node**의 리팩토링된 디렉토리 구조, 모듈 간 상호작용 및 gRPC API 규격을 정의한 기술 명세서입니다.
 
 ---
 
-## 1. 개요 및 역할
+## 1. 개요 및 모듈 패키지 구조
 
-Head Node는 클러스터의 마스터 노드로서 분산 시스템 내 모든 메타데이터를 유지 및 동기화하는 **GCS(Global Control Store)** 역할을 겸하며, 워커들의 생존 상태를 감시하고 최적의 워커 노드에 연산 작업을 분배하는 지능형 스케줄러를 가동합니다.
+Head Node는 클러스터의 마스터 노드로서 전역 공유 메타데이터를 유지하는 GCS와 리소스 감시 가드, 그리고 각 스케줄링 위임 모듈들로 세분화되어 관리됩니다.
 
 ```
-                  ┌──────────────────────────────────────────┐
-                  │                 Head Node                │
-                  │  ┌──────────────┐      ┌──────────────┐  │
-                  │  │   gRPC 서버   │      │  스케줄러    │  │
-                  │  │ (Heartbeat,  │ <──> │  및 모니터링 │  │
-                  │  │  Register)   │      │   루프       │  │
-                  │  └──────────────┘      └──────────────┘  │
-                  │          ▲                     │         │
-                  │          │ (인메모리 갱신)      │ (Assign)│
-                  │          ▼                     ▼         │
-                  │  ┌──────────────────────────────────┐    │
-                  │  │   worker_registry (인메모리 GCS)   │    │
-                  │  └──────────────────────────────────┘    │
-                  └──────────────────────────────────────────┘
-                               ▲                   │
-                    Heartbeat  │                   │ AssignTask
-                    (매 1.0초) │                   │ (gRPC)
-                               │                   ▼
-                     [ Worker Containers (cgroup 격리) ]
+head/
+  ├── head.py              # [인프라] gRPC 서버 부팅 및 백그라운드 스케줄러 스레드 개시
+  ├── state.py             # [인프라] worker_registry 및 task_status 전역 데이터 정의
+  ├── cluster_manager.py   # [인프라] Docker SDK 컨테이너 조작 및 WSL2 가용 RAM 가드
+  ├── scheduler/           # 기본 스케줄러 계층 패키지
+  │     ├── __init__.py
+  │     ├── core.py        # 중앙 제어 스레드 루프 (Backfilling 스케줄링 정책 실행)
+  │     ├── static.py      # Static 스케줄러 스텝 함수
+  │     └── dynamic.py     # Dynamic 스케줄러 스텝 함수
+  └── q_learning/          # 지능형 Q-Learning 최적화 의사결정 패키지
+        ├── __init__.py
+        ├── agent.py       # QLearningAgent 클래스 (Aging 누적 지연 페널티 적용)
+        ├── scheduler.py   # Q-Learning 스케줄러 스텝 의사결정 함수
+        └── q_table.json   # 강화학습 경험치 테이블 JSON 영속 파일
 ```
 
 ---
 
-## 2. 주요 데이터 구조
+## 2. 모듈간 데이터 흐름 및 상호작용
 
-Head Node의 메모리 내에서 가상 분산 노드의 모든 메타데이터를 보존하고 다중 스레드 안전성을 확보하기 위해 다음 변수들을 활용합니다.
-
-| 변수명 | 데이터 타입 | 설명 |
-| :--- | :--- | :--- |
-| `worker_registry` | `dict` | 등록된 모든 활성 워커의 상태 정보를 관리하는 인메모리 GCS. key는 `worker_id` (str)입니다. |
-| `registry_lock` | `threading.Lock` | gRPC 요청 처리 스레드들과 스케줄러 백그라운드 스레드 간의 `worker_registry` 동시 접근(Race Condition)을 방지하기 위한 뮤텍스 락. |
-| `task_counter` | `int` | 고유한 태스크 ID 생성을 위한 전역 카운터 변수. |
-
-### `worker_registry` 내부 구조 예시
-```json
-{
-  "worker-01": {
-    "node_type": "on_demand",
-    "ip": "172.18.0.2",
-    "port": 50052,
-    "last_heartbeat": 1719323456.78,
-    "cpu": 12.5,
-    "mem": 40.0,
-    "status": "IDLE"
-  }
-}
+```
+[ head.py (gRPC) ] ──(하트비트 수신)──> [ state.py (GCS 캐시) ]
+        │                                       ▲
+        └──────(스레드 실행 개시)───────────┐      │ (인메모리 자원 참조)
+                                            ▼      │
+                                    [ scheduler/core.py ] 
+                                            │
+                             ┌──────────────┼──────────────┐
+                             ▼              ▼              ▼
+                        [ static.py ]  [ dynamic.py ]  [ q_learning/scheduler.py ]
+                                                           └──> [ agent.py ]
 ```
 
----
-
-## 3. gRPC 서비스 API 명세
-
-Head Node는 워커 노드들의 등록, 퇴장 및 생존 신고(하트비트)를 처리하기 위해 `BabyRayServiceServicer`를 상속받은 gRPC 서버를 포트 `50051`에서 가동합니다.
-
-### ① `RegisterWorker` (RPC)
-- **역할**: 구동된 Worker Node의 최초 등록을 처리하고 GCS 레지스트리에 초기 세팅을 반영합니다.
-- **요청 메시지 (`RegisterRequest`)**:
-  - `worker_id` (str): 워커 식별자
-  - `node_type` (str): 노드 등급 (`on_demand`, `spot_a`, `spot_b`)
-  - `port` (int32): 워커가 수신 대기 중인 gRPC 포트 번호
-- **응답 메시지 (`RegisterResponse`)**:
-  - `success` (bool): 등록 성공 여부 (`True`/`False`)
-  - `message` (str): 완료 혹은 에러 메시지
-- **상세 동작**:
-  - `context.peer()`를 파싱하여 호출한 워커의 실제 IP 주소(IPv4 또는 IPv6)를 동적으로 추출합니다. (WSL2 및 Docker 가상 네트워크 환경 대응)
-  - `registry_lock`을 획득한 후 해당 워커 정보를 `status="IDLE"`, `cpu=0.0`, `mem=0.0`으로 초기화하여 `worker_registry`에 적재합니다.
-
-### ② `DeregisterWorker` (RPC)
-- **역할**: 워커가 프로세스 종료 시 보내는 퇴장 요청을 처리하여 클러스터 활성 노드 풀에서 즉시 제거합니다.
-- **요청 메시지 (`DeregisterRequest`)**: `worker_id` (str)
-- **응답 메시지 (`DeregisterResponse`)**: `success` (bool), `message` (str)
-
-### ③ `SendHeartbeat` (RPC)
-- **역할**: 각 워커로부터 실시간으로 전송되는 성능 및 자원 메트릭을 수신하여 갱신합니다.
-- **요청 메시지 (`HeartbeatRequest`)**:
-  - `worker_id` (str): 워커 식별자
-  - `cpu_utilization` (float): 현재 워커 컨테이너의 실시간 CPU 사용률 (%)
-  - `memory_utilization` (float): 현재 워커 컨테이너의 실시간 메모리 사용률 (%)
-- **응답 메시지 (`HeartbeatResponse`)**: `ack` (bool)
-- **상세 동작**:
-  - `worker_registry`에서 해당 워커의 `last_heartbeat` 타임스탬프를 호출 시점의 `time.time()`으로 갱신합니다.
-  - 전송받은 `cpu` 및 `mem` 사용률 수치를 레지스트리에 업데이트하여 스케줄러가 참조할 수 있게 합니다.
+1.  **gRPC 인프라 (`head.py`)**: 워커 노드들의 생존 신고를 받아 `state.py`의 `worker_registry`에 하트비트 시각과 CPU/MEM을 실시간 업데이트합니다.
+2.  **중앙 스케줄러 (`scheduler/core.py`)**: 백그라운드 스레드로 돌며 대기열에 작업이 유입되면 현재 활성화된 스케줄러 모드(`SCHEDULER_MODE = "dynamic"`)에 맞춰 해당 패키지 파일의 step 함수로 의사결정을 위임합니다.
+3.  **지능형 의사결정 (`q_learning/`)**: Q-Learning 모드 기동 시, `agent.py`가 4차원 상태(태스크 프로파일, 활성 인스턴스 정보, 예산 잔량)를 평가하고 Bellman Equation에 맞춰 Q-Table을 갱신합니다.
 
 ---
 
-## 4. 백그라운드 스케줄러 및 모니터링 메커니즘
+## 3. 핵심 gRPC 서비스 API 명세
 
-Head Node 구동 시, 메인 스레드와 별개로 두 가지 핵심 흐름(장애 감지 및 작업 스케줄링)을 가진 `scheduler_loop`가 백그라운드 스레드로 상시 실행됩니다.
+Head Node는 포트 `50051`에서 `BabyRayServiceServicer`를 가동하여 다음 RPC 통신을 수신 처리합니다.
+
+### ① `RegisterWorker(RegisterRequest) -> RegisterResponse`
+*   **역할**: 최초 기동된 워커 노드를 GCS 레지스트리에 `status="IDLE"`로 등록합니다.
+*   **상세**: `context.peer()`를 역산하여 도커 가상 네트워크 브릿지 내의 워커 실제 IP 주소를 동적으로 감지하여 세팅합니다.
+
+### ② `SendHeartbeat(HeartbeatRequest) -> HeartbeatResponse`
+*   **역할**: 워커로부터 실시간 CPU/MEM 점유율을 1초 주기로 받아 `last_heartbeat` 타임스탬프를 갱신합니다. 
+*   **상세**: 15초간 하트비트가 끊어진 노드는 DEAD 노드로 격리 분류하고 Docker SDK를 통해 즉시 컨테이너를 강제 Stop/Remove 처리합니다.
+
+---
+
+## 4. 인프라 리소스 관리 및 컨테이너 제어 (`cluster_manager.py`)
+
+`cluster_manager.py` 모듈은 호스트 물리 자원(RAM/VRAM)의 과부하를 막는 **Safety Guard** 역할과 함께, 컨테이너 라이프사이클을 실질적으로 조작하는 3가지 핵심 회수/소거 함수들을 제공합니다. 
+
+### ① 컨테이너 회수 및 소거 함수 3종 비교
+
+| 비교 항목 | `scale_in_specific_worker` | `cleanup_zombie_containers` | `eviction_loop` (Spot Eviction) |
+| :--- | :--- | :--- | :--- |
+| **핵심 목적** | 부하 감소에 따른 **안전하고 정상적인** 리소스 감축 | 재부팅 시 잔존 찌꺼기 컨테이너 **강제 일괄 정리** | 스팟 요금제 위험도에 따른 **무작위 중단 장애 시뮬레이션** |
+| **동작 시점** | 저부하 상태(CPU/MEM < 20%) 지속 시 (스케줄러 호출) | Head 노드 부팅(serve 기동) 시 1회 비동기 작동 | 백그라운드에서 6초 주기 무한 루프 작동 |
+| **대상 상태** | **반드시 `IDLE`** 상태인 워커 노드만 선별 | 상태 무관 (`worker-2`, `worker-3` 명명 패턴 일치 노드 전체) | **상태 무관** (현재 태스크 수행 중인 `BUSY` 노드도 강제 회수) |
+| **선정 우선순위** | 메모리 점유율이 높은 노드를 1순위로 우선 회수 (OOM 방지) | 우선순위 없음 (스캔된 잔존 좀비 노드 전체 대상) | 위험 주기(30초 중 10초 가격 폭등기) 및 확률 난수 기반 선정 |
+| **작업 안전성** | **안전성 보장** (실행 중인 태스크 영향 없음) | **안전성 없음** (부팅 단계의 찌꺼기 정리 용도) | **안전성 없음** (의도적 장애 유도로 스케줄러 복구력 검증) |
+
+### ② 기술적 포인트 (Technical Points)
+* **상태 필터링 격리:** `scale_in_specific_worker`는 전역 락(`state.registry_lock`) 하에서 `IDLE` 상태인 워커 노드만 필터링하여 정상 연산 중인 태스크가 유실(Data Loss)되는 상황을 원천 예방합니다.
+* **비동기 부팅 클린업:** `cleanup_zombie_containers`는 gRPC 포트 바인딩 및 마스터 초기화 스레드를 블로킹하지 않도록 `daemon=True` 스레드로 비동기 기동되어 이전 사이클의 찌꺼기를 백그라운드에서 소거합니다.
+* **소프트웨어적 강제 회수:** `eviction_loop`는 실제 AWS/GCP의 스팟 중단(Preemption) 시나리오를 모사합니다. GCS 맵에서 대상을 선제 격리(`del state.worker_registry[wid]`)한 후 Docker SDK로 컨테이너를 강제 정지/삭제하여 장애 상황을 에뮬레이트합니다.
+
+### ③ 작동 프로세스 다이어그램 (Mermaid)
 
 ```mermaid
-flowchart TD
-    Start([scheduler_loop 기동]) --> Sleep[10초 대기]
-    Sleep --> Lock[registry_lock 획득]
-    Lock --> CheckDead[1. DEAD 노드 탐색]
-    
-    CheckDead -->|현재 시간 - last_heartbeat > 15초| MarkDead[GCS에서 워커 제거 및 로그 출력]
-    CheckDead -->|정상 생존| FindIdle[2. IDLE 워커 탐색]
-    
-    MarkDead --> FindIdle
-    FindIdle -->|가용 워커가 존재함| SelectBest[CPU 사용량이 가장 낮은 최적 워커 선정]
-    FindIdle -->|가용한 워커 없음| ReleaseLock[Lock 해제 후 대기 상태로 회귀]
-    
-    SelectBest --> Assign[3. run_task_on_worker 백그라운드 스레드 가동]
-    Assign --> ReleaseLock
-    ReleaseLock --> Sleep
+graph TD
+    subgraph "cluster_manager.py 인프라 제어 흐름"
+        A[Head Node 기동] -->|최초 1회 비동기 스레드 기동| B(cleanup_zombie_containers)
+        C[스케줄러 의사결정 루프] -->|저부하 판정 시 호출| D(scale_in_specific_worker)
+        E[Spot Eviction Daemon] -->|6초 주기 무한 루프| F(eviction_loop)
+        
+        %% cleanup_zombie_containers 흐름
+        B --> B1[Docker Host 컨테이너 목록 스캔]
+        B1 --> B2{"이름이 'babyray-worker-2/3-' 로 시작하는가?"}
+        B2 -->|Yes| B3[docker.stop & remove 강제 소거]
+        B2 -->|No| B4[스킵]
+        
+        %% scale_in_specific_worker 흐름
+        D --> D1[GCS에서 IDLE 상태인 대상 타입 노드 필터링]
+        D1 --> D2{"IDLE 노드가 존재하는가?"}
+        D2 -->|Yes| D3[메모리 점유율이 높은 순으로 정렬]
+        D3 --> D4[가장 점유율 높은 노드 선정]
+        D4 --> D5[docker.stop & remove 안전 회수]
+        D5 --> D6[GCS 레지스트리에서 삭제]
+        D2 -->|No| D7[스케일인 생략]
+        
+        %% eviction_loop 흐름
+        F --> F1[GCS에서 모든 Spot 노드 목록 추출]
+        F1 --> F2{"Spot 노드가 존재하는가?"}
+        F2 -->|Yes| F3[각 노드별 Eviction 단가 위험도 기반 난수 확률 평가]
+        F3 --> F4{"피탈 확률 적중?"}
+        F4 -->|Yes| F5[GCS 레지스트리에서 즉시 선제 격리 및 삭제]
+        F5 --> F6[docker.stop & remove 강제 파괴 및 자원 회수]
+        F4 -->|No| F7[정상 가동 유지]
+        F2 -->|No| F8[대기]
+    end
 ```
-
-### ① 장애 감지 및 자원 정리 루프
-- **판정 기준**: 현재 시간(`time.time()`)에서 워커가 마지막으로 보낸 하트비트 시각(`last_heartbeat`)을 뺀 값이 **15.0초**를 초과하는 경우 해당 노드를 `DEAD` 상태로 판정합니다.
-- **사후 처리**: `worker_registry`에서 해당 워커 정보를 완전 격리 삭제하고 경고 로그를 출력합니다. 이후 스케줄러는 해당 노드에 작업을 배정하지 않습니다.
-
-### ② 자원 인지형 동적 스케줄링 (Resource-Aware Scheduling)
-- **가용 풀 탐색**: `worker_registry` 내부의 워커 상태 변수인 `status`가 `"IDLE"`인 워커 노드들만 필터링합니다.
-- **최적 노드 선정**: 필터링된 가용 워커 풀 중 **실시간 CPU 사용률(`cpu`)이 가장 낮은 워커**를 탐색하여 작업을 배정하도록 결정합니다.
-  - 예시: `Worker-1` (CPU 12.5%, IDLE) / `Worker-2` (CPU 5.2%, IDLE) 일 경우 `Worker-2`가 최종 선정됩니다.
-- **비동기 작업 실행**: 스케줄러의 루프가 블로킹되는 것을 방지하기 위해, 선정된 노드에 대한 작업 전송 및 완료 대기는 별도의 스레드(`run_task_on_worker`)를 통해 비동기 처리됩니다.
-
-### ③ 실시간 진행 모니터링 (`run_task_on_worker`)
-작업이 배정된 워커의 수명 주기 및 진행률을 실시간으로 추적하는 독립 실행 스레드입니다.
-1. **상태 변경**: 대상 워커의 GCS 상태를 `"BUSY"`로 즉시 변경하여 추가적인 중복 할당을 방지합니다.
-2. **AssignTask 요청**: 해당 워커의 gRPC 엔드포인트로 `AssignTask` 원격 호출을 보내어 모델 종류와 총 에포크 수를 지시합니다.
-3. **상태 폴링 (Polling)**: 
-   - 2초 간격으로 `stub.GetTaskStatus(...)`를 원격 호출하여 워커의 현재 진행률(`progress`)과 학습 로그(`logs`)를 실시간으로 받아옵니다.
-   - 응답받은 상태 코드가 `SUCCESS`, `FAILED`, `COMPLETED` 중 하나에 해당하면 모니터링 루프를 해제합니다.
-4. **자원 반환**: 태스크 처리가 완료되거나 예외 상황(gRPC 연결 끊김 등)이 발생하면 워커 노드의 상태를 다시 `"IDLE"`로 변경하여 다음 작업을 대기시킵니다.

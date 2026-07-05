@@ -1,540 +1,281 @@
 # ==============================================================================
-# WE-MEET: Head Node gRPC 서버 및 Q-Learning 스케줄러 통합 구현 (head/head.py)
+# WE-MEET: Head Node gRPC 서버 메인 컨트롤러 (head/head.py)
 # ==============================================================================
 
 import grpc
-from concurrent import futures
+from concurrent import futures # 비동기 작업 / 스테드 풀 관리
 import time
 import os
-import sys
+import sys # 모듈 검색 경로 조작 sys
+import psutil
 import threading
-import random
-import subprocess
+import signal
+
+# 표준 출력 버퍼 비우기 (Flush) 설정
+import builtins
+_original_print = builtins.print
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    _original_print(*args, **kwargs)
+builtins.print = print
 
 # 실행 시 프로젝트 루트 디렉토리 및 현재 디렉토리를 sys.path에 추가하여 패키지들을 정상적으로 찾을 수 있도록 설정합니다.
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
+# 루트에 있는 proto나 common 패키지를 어디서든 임포트할 수 있게 함
+
 from proto import babyray_pb2
 from proto import babyray_pb2_grpc
 from common.config import DEFAULT_HEAD_PORT
 
-# Q-Learning 스케줄링 에이전트 가져오기
-from q_learning import QLearningAgent
-
-# Docker SDK 임포트 
-# -> import 오류가 자주 나서 try-except로 감싸줌
-try:
-    import docker
-    # docker.from_env()는 호스트의 Docker Daemon 소켓(/var/run/docker.sock)과 자동으로 채널을 수립합니다.
-    DOCKER_CLIENT = docker.from_env()
-    print("[Docker SDK] 호스트 도커 데몬 연결 성공.")
-except Exception as e:
-    DOCKER_CLIENT = None
-    print(f"[Docker SDK 경고] 도커 데몬 연결 실패 (예외 안전 모드 가동): {e}")
-
-
-# --- 1. 전역 리소스 상태 및 GCS (Global Control Store) 정의 ---
-
-# 워커 관리용 인메모리 GCS 레지스트리
-# worker_id -> { "node_type": str, "ip": str, "port": int, "last_heartbeat": float, "cpu": float, "mem": float, "status": str }
-worker_registry = {} # 등록된 모든 worker 노드의 상태 정보 등록
-registry_lock = threading.Lock()
-
-# 가상 태스크 대기열 (Task Queue)
-task_queue = []
-queue_lock = threading.Lock()
-
-# 전역 가상 자산 관리 변수
-virtual_budget = 100.0  # 초기 예산 $100.0달러
-task_counter = 0 # 고유한 TASK ID 생성을 위한 카운터 변수
-
-# Q-Learning 에이전트
-# cost.yaml의 경로를 찾음 (head에서 ../common/cost_model.yaml -> 부모 디렉토리 common 폴더의 cost_model.yaml)
-COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
-agent = QLearningAgent(cost_model_path=COST_MODEL_PATH)
-# 에이전트는 cost_model.yaml에 정의된 비용 모델을 참고해서 학습하거나 행동을 결정하게 됩니다.
-
-# --- 2. Docker 가상 클러스터 동적 통제 API (Docker SDK & CLI) ---
-
-def scale_workers(service_name, target_count):
-    """
-    [Docker SDK CLI API]
-    호스트 PC의 Docker Compose CLI를 호출하여 해당 워커 노드 컨테이너의 활성 대수를 변경합니다.
-    - SCALE_OUT 발생 시 target_count를 늘려 새 워커를 가동하고
-    - SCALE_IN 발생 시 target_count를 줄여 유휴 노드를 회수합니다.
-    """
-    try:
-        # docker-compose.yml 경로 추출 (head/../docker/docker-compose.yml)
-        compose_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../docker/docker-compose.yml'))
-        
-        # subprocess.run()을전달할 명령어를 리스트 형태로 구성하기 시작합니다.
-        # --no-recreate와 대상 서비스명을 명시하여 Head 컨테이너가 스스로를 재기동(137 종료)하는 재귀 루프를 방지합니다.
-        cmd = [
-            "docker", "compose",
-            "-f", compose_path,
-            "up", "-d",
-            "--no-recreate",
-            "--scale", f"{service_name}={target_count}",
-            service_name
-        ]
-
-        # -f 뒤에 compose_path를 전달 -> 동적 스케일링 적용할 compose 파일 명시
-        # up -d -> 백그라운드에서 실행
-        # --no-recreate -> 기존 컨테이너가 있어도 재생성하지 않음 (오류나 멈춤으로 인해 재실행시 기존 컨테이너 정보 유지 -> 137 방지)
-        # --scale -> 서비스 이름과 원하는 수를 지정 -> 워커 컨테이너 수를 조절
-
-        # docker에서 증감 연산이 존재 하지 않아서 1씩 증감하는 로직을 추가 -> Scale out 일 때는 문제가 없음
-
-        # 진짜 문제는 Scale-in 쪽입니다 — current_worker_2_scale을 줄여서 --scale worker-2=1을 호출하면 Docker가 어떤 컨테이너를 죽일지 선택할 수 없어서, 작업 중인 컨테이너가 죽을 수 있는 것이죠.
-        # 그래서 현재 sleep으로 재우는 우회를 쓰고 계신 거고요.
-        
-
-        # subprocess를 이용해 명령 실행 후 출력과 결과를 반환받음
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        print(f"[Docker SDK CLI] 스케일링 완료 -> {service_name} 를 {target_count}대로 갱신.")
-        return True
-    except Exception as e:
-        print(f"[Docker SDK CLI 에러] {service_name} 스케일링 실패: {e}")
-        return False
-
-
-def get_container_metrics(container_name):
-    """
-    [Docker SDK Resource Monitor API]
-    Docker SDK 객체를 통해 해당 워커 컨테이너의 실시간 메모리/CPU 사용률 메트릭을 도출합니다.
-    """
-
-    # Docker Daemon = 실제 실행 하는 엔진
-    # Docker Client Object = 개발자가 Docker Engine을 쉽게 조작할 수 있게 해주는 파이썬 도구
-    if DOCKER_CLIENT is None:
-        return 0.0, 0.0
-        
-    try:
-
-        # 호스트 도커 데몬으로부터 가동 중인 컨테이너 정보를 로드합니다.
-        container = DOCKER_CLIENT.containers.get(container_name)
-        # 1회성 스냅샷 메트릭 수집
-        # stream=True로 설정하면 실시간 데이터 스트림을 받을 수 있음
-        stats = container.stats(stream=False)
-        
-        # stats 딕셔너리 구조
-        # stats['cpu_stats']['cpu_usage']['total_usage']: 컨테이너의 CPU 총 사용량
-        # stats['cpu_stats']['system_cpu_usage']: 호스트의 CPU 총 사용량
-        # stats['memory_stats']['usage']: 컨테이너의 메모리 사용량
-        # stats['memory_stats']['limit']: 컨테이너의 메모리 한계
-
-        # CPU 연산률 산출
-        cpu_stats = stats.get("cpu_stats", {})
-        precpu_stats = stats.get("precpu_stats", {})
-        cpu_delta = cpu_stats.get("cpu_usage", {}).get("total_usage", 0) - precpu_stats.get("cpu_usage", {}).get("total_usage", 0)
-        system_delta = cpu_stats.get("system_cpu_usage", 0) - precpu_stats.get("system_cpu_usage", 0)
-        num_cpus = cpu_stats.get("online_cpus", 1)
-        
-        # 호스트 시스템 전체가 CPU를 쓰는 동안, 
-        # 그중 컨테이너가 얼마만큼의 비율을 차지했는지 %로 환산하는 표준 Docker CPU 계산
-
-        cpu_util = 0.0
-        if system_delta > 0 and cpu_delta > 0:
-            cpu_util = (cpu_delta / system_delta) * num_cpus * 100.0
-            
-        # Memory 사용률 산출
-        mem_stats = stats.get("memory_stats", {})
-        mem_usage = mem_stats.get("usage", 0)
-        mem_limit = mem_stats.get("limit", 1)
-        # 메모리를 몇 % 사용 중인지 계산
-        mem_util = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0.0
-        
-        return round(cpu_util, 1), round(mem_util, 1)
-    except Exception:
-        # 컨테이너 미발견 혹은 윈도우 도커 비호환 대비 대체 더미값 반환
-        return random.uniform(10.0, 30.0), random.uniform(30.0, 50.0)
-
-
-# --- 3. Head Node gRPC 통신 서비스 핸들러 ---
-
-# [Worker가 Head에 request를 보내는 흐름] (worker.py 참조)
-#
-# Worker 부팅 (docker-compose 실행)
-#   │
-#   ├─ 1. argparse로 실행 인자 파싱 (worker.py line 212~220)
-#   │     --id worker-1 --type on_demand --port 50052
-#   │
-#   ├─ 2. socket.gethostname()으로 고유 ID 생성 (worker.py line 222)
-#   │     "worker-1@컨테이너ID"
-#   │
-#   ├─ 3. 자기 자신의 gRPC 서버 기동 (worker.py line 178~183)
-#   │     포트 50052에서 Head의 명령(AssignTask/GetTaskStatus)을 대기
-#   │
-#   └─ 4. heartbeat_sender_loop 스레드 시작 (worker.py line 187~192)
-#         │
-#         ├─ Head에 gRPC 채널 연결 (worker.py line 103)
-#         │     head:50051
-#         │
-#         ├─ ★ stub.RegisterWorker() 호출 (worker.py line 111~115)
-#         │     RegisterRequest {
-#         │       worker_id: "worker-1@abc123",
-#         │       node_type: "on_demand",
-#         │       port: 50052           ← Worker가 자기 gRPC 서버 포트를 알려줌
-#         │     }
-#         │     ip는 Worker가 보내는 것이 아니라, Head가 context.peer()에서 직접 파싱
-#         │
-#         ├─ ★ 등록 성공 후 → 1초 간격 stub.SendHeartbeat() 반복 (worker.py line 132~172)
-#         │     HeartbeatRequest { worker_id, cpu_utilization, memory_utilization }
-#         │
-#         └─ ★ Worker 종료(Ctrl+C) 시 → stub.DeregisterWorker() 호출 (worker.py line 204~206)
-#               DeregisterRequest { worker_id }  → GCS에서 자기 자신을 해제
-#
+# 모듈화된 구성요소 임포트
+import head.state as state # 전역 상태 관리
+import head.cluster_manager as cluster_manager # docker/cGroup 관련 함수 모음
+import head.scheduler.scheduler_daemon as scheduler# Q-Learning 기반 스케줄러
+import head.dashboard.server as dashboard # 대시보드 HTTP 서버
 
 class BabyRayHeadServicer(babyray_pb2_grpc.BabyRayServiceServicer):
+    """
+    Baby Ray Head Node의 gRPC 서비스 처리를 전담하는 서비서 클래스입니다.
+    GCS(Global Control Store) 역할을 하는 state.worker_registry를 갱신 및 조회합니다.
+    """
     def RegisterWorker(self, request, context):
-        # peer  변수 = worker 노드가 접속해 온 네트워크 정보 (IPv4, IPv6)
-        peer = context.peer()
+        """
+        워커 노드를 클러스터 및 GCS에 신규 등록합니다.
+
+        Args:
+            request (RegisterRequest): 워커 ID, 노드 타입 및 포트 번호가 담긴 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            RegisterResponse: 등록 성공 여부 및 결과 메시지.
+        """
+        #  gRPC나 분산 시스템에서 현재 실행 중인 컨텍스트의 상대방(peer) 정보를 가져오는 명령어 (IPv4 주소 확보)
+        peer = context.peer() 
         
-        # IPv4 환경일 때: "ipv4:192.168.0.5:50051"
-        # IPv6 환경일 때: "ipv6:[2001:db8::1]:50051"
-
-
         # gRPC peer IP 주소 파싱 (IPv4 및 IPv6 호환)
+
         if peer.startswith("ipv4:"):
             ip = peer.split(":")[1]
+        # "ipv4:192.168.0.10:50051" → "192.168.0.10" (IPv4)
+
         elif peer.startswith("ipv6:"):
             last_colon = peer.rfind(":")
             ip = peer[5:last_colon]
             ip = ip.replace("%5B", "").replace("%5D", "").replace("[", "").replace("]", "")
-        # 포멧을 알 수 없음
+        # "ipv6:[2001:db8::1]:50051" → "2001:db8::1" (IPv6)
+
         else:
             ip = "127.0.0.1"
+        # 둘 다 아닐 경우에는 로컬 IP로 간주
             
-        # IPv6 로컬호스트 [::1]일 경우 [IP_ADDRESS]로 변경
         if ip == "::1":
             ip = "127.0.0.1"
 
-            
-        with registry_lock:
-            worker_registry[request.worker_id] = {
+        # [아키텍처 디자인 선택 (Trade-off)]
+        # 분산 시스템에서는 원래 고가용성(HA)과 상태 영속성을 보장하기 위해 분산 합의 저장소(예: etcd, ZooKeeper)나
+        # 외부 Redis 등을 사용하는 것이 정석입니다. 다만, 본 프로젝트는 Docker 기반 경량 분산 런타임(Baby Ray)을 지향하므로
+        # 배포 편의성과 오버헤드 최소화를 위해 단일 Head 노드 내 인메모리 딕셔너리 + Lock 동기화 방식을 채택하였습니다.
+        with state.registry_lock:
+            # 1. 중복 ID 검증 -> 이름이 겹쳐서 나느 충돌을 회피
+            if request.worker_id in state.worker_registry:
+                dashboard.log_event(f"[Head Registry 경고] 워커 등록 실패 (중복 ID 감지): ID='{request.worker_id}'")
+                return babyray_pb2.RegisterResponse(
+                    success=False,
+                    message=f"Registration failed. Worker ID '{request.worker_id}' is already registered."
+                )
+
+            # 2. 신규 등록 진행
+            state.worker_registry[request.worker_id] = {
                 "node_type": request.node_type.lower(),
                 "ip": ip,
-                "port": request.port, # Worker가 자기 gRPC 서버 포트를 알려줌 
+                "port": request.port,
                 "last_heartbeat": time.time(),
                 "cpu": 0.0,
                 "mem": 0.0,
                 "status": "IDLE"
             }
-            print(f"[Head Registry] 워커 신규 등록: ID='{request.worker_id}' | 주소: {ip}:{request.port} | 타입: {request.node_type}")
+            # HTTP 서버에 출력
+            dashboard.log_event(f"[Head Registry] 워커 신규 등록: ID='{request.worker_id}' | 주소: {ip}:{request.port} | 타입: {request.node_type}")
         
-        # 등록이 성공적으로 되었다면    
+        # 워커에게 성공 응답 전송 (grpc)
         return babyray_pb2.RegisterResponse(
             success=True, 
             message=f"Worker '{request.worker_id}' registered successfully on Head GCS."
         )
 
     def DeregisterWorker(self, request, context):
-        # mutual exclusion 보장
-        with registry_lock:
-            
-            if request.worker_id in worker_registry:
-                # 인메모리 캐시에서 지우기
-                del worker_registry[request.worker_id]
+        """
+        워커 노드가 퇴장할 때 GCS의 레지스트리에서 해당 워커 정보를 삭제합니다.
+
+        Args:
+            request (DeregisterRequest): 퇴장할 워커 식별자가 포함된 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            DeregisterResponse: 해제 성공 여부 및 결과 메시지.
+        """
+        # state.worker_registry에서 해당 워커 정보를 삭제 (lock 사용)
+        with state.registry_lock:
+            # worker_id가 레지스트리에 있는지 확인
+            if request.worker_id in state.worker_registry:
+                # 삭제 (퇴장 처리) - 인메모리 캐시 제거
+                del state.worker_registry[request.worker_id]
                 print(f"[Head Registry] 워커 정상 퇴장: ID='{request.worker_id}'")
                 return babyray_pb2.DeregisterResponse(success=True, message="Deregistered.")
+            
+            # worker_id가 없으면
             return babyray_pb2.DeregisterResponse(success=False, message="Worker not found.")
 
     def SendHeartbeat(self, request, context):
-        # worker_id에서 컨테이너 식별자 파싱 (예: worker-2@8f219bf6a8c2 -> 8f219bf6a8c2)
-        container_identifier = request.worker_id.split("@")[-1] if "@" in request.worker_id else request.worker_id
-        real_cpu, real_mem = get_container_metrics(container_identifier)
+        """
+        워커로부터 실시간 자원 상태 및 생존 신고(Heartbeat)를 받아 GCS를 업데이트합니다.
+
+        Args:
+            request (HeartbeatRequest): 워커 ID 및 CPU, 메모리 자원 사용량 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            HeartbeatResponse: 수신 응답(Ack) 메시지.
+        """
+        # 워커 ID를 기반으로 컨테이너 이름 생성 (worker-1은 babyray-on-demand로 매핑)
+        if request.worker_id == "worker-1":
+            container_name = "babyray-on-demand"
+        else:
+            container_name = f"babyray-{request.worker_id}"
+
+        # 컨테이너의 실제 CPU 및 메모리 사용량 조회
+        real_cpu, real_mem = cluster_manager.get_container_metrics(container_name)
         
-        with registry_lock:
-            if request.worker_id in worker_registry:
-                worker_registry[request.worker_id]["last_heartbeat"] = time.time() # 마지막에 체크한 시간 변경
-                # SDK 실시간 자원량 값 주입 (실패 시 하트비트 전송자가 송신한 더미 값 반영)
-                worker_registry[request.worker_id]["cpu"] = real_cpu if real_cpu > 0 else request.cpu_utilization
-                worker_registry[request.worker_id]["mem"] = real_mem if real_mem > 0 else request.memory_utilization
+        with state.registry_lock:
+            if request.worker_id in state.worker_registry:
+                # 워커의 마지막 하트비트 시간 갱신
+                state.worker_registry[request.worker_id]["last_heartbeat"] = time.time()
+                # SDK 실시간 자원량 값 주입 (실패 시 하트비트 전송자가 송신한 더미 값 반영) - 기본적인 값은 0.0 / OOM이 trigger 되면 99.9%의 형태
+                state.worker_registry[request.worker_id]["cpu"] = real_cpu if real_cpu > 0 else request.cpu_utilization
+                state.worker_registry[request.worker_id]["mem"] = real_mem if real_mem > 0 else request.memory_utilization
                 
-                # 수신된 메트릭 로그 출력
-                print(f"[Head GCS] Heartbeat 수신 | ID: '{request.worker_id}' | CPU: {worker_registry[request.worker_id]['cpu']}%, Mem: {worker_registry[request.worker_id]['mem']}%")
+                # 수신된 메트릭 로그 출력 (콘솔에만 출력하여 대시보드 로그 flooding 방지)
+                print(f"[Head GCS] Heartbeat 수신 | ID: '{request.worker_id}' | CPU: {state.worker_registry[request.worker_id]['cpu']}%, Mem: {state.worker_registry[request.worker_id]['mem']}%")
                 
         return babyray_pb2.HeartbeatResponse(ack=True)
 
 
-# --- 4. 태스크 스레드 핸들러 및 Q-Learning 상태 피드백 루프 ---
-
-def run_task_on_worker(worker_id, worker_info, task, state, action):
+def get_dashboard_data():
     """
-    [Task 실행 및 강화학습 피드백 스레드]
-    특정 워커에 작업을 할당하여 gRPC로 실행 지시를 내리고 완료 모니터링 후 보상(Reward)을 계산하여 Q-Table을 갱신합니다.
+    대시보드 HTTP API 조회를 위해 GCS 상태 데이터 스냅샷을 딕셔너리로 반환합니다.
+
+    Returns:
+        dict: 가상 예산, 워커 목록, 대기열, 호스트 CPU/메모리, GPU 가용 VRAM 정보가 포함된 딕셔너리.
     """
-    global virtual_budget
-    # worker_registry -> worker_info를 뽑아서 줌
-    ip = worker_info['ip']
-    worker_address = f"[{ip}]:{worker_info['port']}" if ":" in ip else f"{ip}:{worker_info['port']}"
-    task_id = task["task_id"]
-    model_type = task["model_type"]
-    epochs = task["epochs"]
-    worker_type = worker_info["node_type"]
-    
-    print(f"\n[Scheduler Action] >>> 작업 할당 실행: {task_id} ({model_type}) -> 워커 '{worker_id}' ({worker_type})")
-    
-    # 워커 상태를 BUSY로 마킹하여 중복 할당 방지
-    with registry_lock:
-        if worker_id in worker_registry:
-            worker_registry[worker_id]["status"] = "BUSY"
-            
-    success = False
-    execution_time = 0.0
-    
-    try:
-        # 워커 gRPC 채널 오픈 / stub 파일 생성
+    with state.registry_lock:
+        workers = {wid: info.copy() for wid, info in state.worker_registry.items()}
+    with state.queue_lock:
+        queue = [t.copy() for t in state.task_queue]
 
-        # 워커의 주소(IP:Port)로 gRPC 통신을 위한 '파이프(채널)'를 연결
-        channel = grpc.insecure_channel(worker_address)
-        # 내 PC에 있는 함수처럼 쉽게 호출할 수 있게 해주는 '리모컨(Stub)' 객체를 생성
-        stub = babyray_pb2_grpc.BabyRayServiceStub(channel)
-        
-        # 1. 작업 개시 전송
-        start_time = time.time()
-        result = stub.AssignTask(babyray_pb2.TaskAssignment(
-            task_id=task_id,
-            model_type=model_type,
-            dataset_path=f"data/{model_type.lower()}_dataset.pt",
-            epochs=epochs
-        ))
-        
-        if result.status == "RUNNING":
-            # 2. 완료 여부 실시간 폴링 감시
-            while True:
-                time.sleep(1.5)
-                
-                # 워커가 죽어 오프라인 처리된 경우 통신 예외 발생 유도
-                with registry_lock:
-                    if worker_id not in worker_registry:
-                        raise grpc.RpcError("Worker node went offline during task execution.")
-                        
-                status_res = stub.GetTaskStatus(babyray_pb2.TaskStatusRequest(task_id=task_id))
-                
-                if status_res.status in ["SUCCESS", "COMPLETED"]:
-                    success = True
-                    execution_time = time.time() - start_time
-                    print(f"[Scheduler Feedback] 작업 {task_id} 완료 성공! (실제 수행 시간: {execution_time:.2f}초)")
-                    break
-                elif status_res.status == "FAILED":
-                    success = False
-                    execution_time = time.time() - start_time
-                    print(f"[Scheduler Feedback] 경고: 작업 {task_id} 연산 실패 리포트 수신.")
-                    break
-        else:
-            print(f"[Scheduler Feedback] 작업 개시 거부당함: {result.message}")
-            
-    except grpc.RpcError as e:
-        print(f"[Scheduler Feedback 에러] 워커 '{worker_id}' 실행 중 통신 크래시 감지: {e}")
-        success = False
-        execution_time = time.time() - task["enqueue_time"]
-    finally:
-        # GCS 워커 노드 상태 복구
-        with registry_lock:
-            if worker_id in worker_registry:
-                worker_registry[worker_id]["status"] = "IDLE"
-                
-        # --- 3. Q-Learning 보상 산출 및 Q-Table 업데이트 피드백 단계 ---
-        end_time = time.time()
-        delay_time = max(0.0, end_time - task["deadline"])
-        deadline_exceeded = end_time > task["deadline"]
-        
-        # 보상 수식 적용
-        reward = agent.calculate_reward(
-            success=success,
-            execution_time=execution_time,
-            worker_type=worker_type,
-            delay_time=delay_time,
-            deadline_exceeded=deadline_exceeded
-        )
-        
-        # 가상 예산 차감
-        cost_profile = agent.nodes_config.get(worker_type, {"cost_per_hour": 0.0})
-        cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
-        task_cost = cost_per_hour * (execution_time / 3600.0)
-        virtual_budget -= task_cost
-        
-        # 큐 상태 갱신 후 다음 상태 추출
-        with queue_lock:
-            q_len_next = min(len(task_queue), 10)
-            
-        with registry_lock:
-            w1_act = 1 if any(info["node_type"] == "on_demand" for info in worker_registry.values()) else 0
-            w2_act = 1 if any(info["node_type"] == "spot_a" for info in worker_registry.values()) else 0
-            w3_act = 1 if any(info["node_type"] == "spot_b" for info in worker_registry.values()) else 0
-            active_bitmap_next = (w1_act * 1) + (w2_act * 2) + (w3_act * 4)
-            
-        budget_level_next = 0 if virtual_budget < 20.0 else (1 if virtual_budget < 70.0 else 2)
-        next_state = (q_len_next, active_bitmap_next, budget_level_next)
-        
-        # Bellman Equation에 입각해 Q-Value 업데이트
-        agent.update_q_value(state, action, reward, next_state)
-        agent.save_q_table()
-        
-        print(f"[Q-Learning Update] State={state} | Action={action} | Reward={reward:.4f} | NextState={next_state}")
-        print(f"[Q-Learning Update] 잔여 가상 예산: ${virtual_budget:.4f}달러\n")
-        
-        # 만약 실패했다면 Task Lineage 자가 복구를 위해 큐 최전방에 작업을 재삽입
-        if not success:
-            print(f"[장애 복구] 작업 {task_id} 장애 유실 감지 -> 복구를 위해 대기 큐 재할당.")
-            with queue_lock:
-                task_queue.insert(0, task)
+    # 완료/실패 태스크 통계 계산
+    total_completed = sum(1 for status in state.task_status.values() if status in ["SUCCESS", "COMPLETED"])
+    total_failed = sum(1 for status in state.task_status.values() if status == "FAILED")
 
+    # Q-Learning Agent의 훈련 파라미터 획득
+    from head.scheduler.task_executor import agent
+    q_epsilon = getattr(agent, "epsilon", 0.0)
+    # q_epsilon = agent.epsilon (객체의 필드값에 접근)
+    # get.attr(객체, 속성명)
 
-# --- 5. 백그라운드 Q-Learning 스케줄러 핵심 루프 ---
+    # 대시보드 웹 API가 JSON 포맷 등으로 파싱하기 편하도록 최종 마스터 데이터 구조 구축
+    return {
+        "virtual_budget": state.virtual_budget,
+        "scheduler_mode": state.SCHEDULER_MODE, # 어떤 스케줄러인지 (static, dynamic, q_learning)
+        "workers": workers, # 현재 워커 정보
+        "queue": queue, # 현재 대기열 정보
+        "total_completed": total_completed, # 완료된 태스크 수
+        "total_failed": total_failed, # 실패한 태스크 수
+        "q_epsilon": q_epsilon, # 딥러닝 모델에서 랜덤성을 제어하는 변수
+        "host_cpu": psutil.cpu_percent(), # CPU 사용률
+        "host_mem": psutil.virtual_memory().percent, # 메모리 사용률
+        "gpu_free_vram": cluster_manager.get_gpu_free_memory(), # GPU 용량 구하는 함수 호출
+        "conclusions": state.latest_conclusions, # 분산학습 추론 결론
+        "nodes_config": getattr(agent, "nodes_config", {}) # 노드 설정
+    }
 
-def scheduler_loop():
-    global task_counter, virtual_budget
-    print("[Scheduler] Q-Learning 비용/SLA 인지형 의사결정 엔진 가동 성공.")
-    
-    model_types = ["CNN", "RNN", "LSTM"]
-    
-    # 초기 컨테이너 대수 세팅 (Compose 기본 스펙 기준)
-    current_worker_2_scale = 1
-    current_worker_3_scale = 1
-    
-    while True:
-        time.sleep(4.0)  # 4초 주기 의사결정 루프
-        
-        # --- 1. DEAD 노드 헬스체크 및 격리 제거 ---
-        current_time = time.time()
-        dead_workers = []
-        with registry_lock:
-            for wid, info in list(worker_registry.items()):
-                # 하트비트 수신이 15.0초 동안 끊어지면 사망 판정
-                if current_time - info["last_heartbeat"] > 15.0:
-                    dead_workers.append(wid)
-            for wid in dead_workers:
-                print(f"[Scheduler GCS] [DEAD 노드 감지] {wid} 노드가 오프라인 처리되었습니다.")
-                del worker_registry[wid]
-
-        # --- 2. 주기적 랜덤 가상 태스크 자동 생성 및 큐 투입 (시뮬레이터 구동용) ---
-        if random.random() < 0.6:  # 60% 확률로 태스크 유입 모사
-            with queue_lock:
-                if len(task_queue) < 10:
-                    task_counter += 1
-                    task_id = f"task-{task_counter:04d}"
-                    model = random.choice(model_types)
-                    # 5에포크 연산 지시, 마감 기한은 넉넉하게 20초~60초 랜덤 할당
-                    deadline = time.time() + random.randint(20, 60)
-                    task_queue.append({
-                        "task_id": task_id,
-                        "model_type": model,
-                        "epochs": 5,
-                        "deadline": deadline,
-                        "enqueue_time": time.time()
-                    })
-                    print(f"[Task 유입] {task_id} ({model}) 큐 적재 완료. (마감기한: {random.randint(20, 60)}초 후)")
-
-        # --- 3. 강화학습 상태 ---
-        with queue_lock:
-            q_len = min(len(task_queue), 10)
-            
-        with registry_lock:
-            w1_act = 1 if any(info["node_type"] == "on_demand" for info in worker_registry.values()) else 0
-            w2_act = 1 if any(info["node_type"] == "spot_a" for info in worker_registry.values()) else 0
-            w3_act = 1 if any(info["node_type"] == "spot_b" for info in worker_registry.values()) else 0
-            active_bitmap = (w1_act * 1) + (w2_act * 2) + (w3_act * 4)
-            
-        # 예산 레벨 이산화
-        budget_level = 0 if virtual_budget < 20.0 else (1 if virtual_budget < 70.0 else 2)
-        state = (q_len, active_bitmap, budget_level)
-
-        if q_len == 0:
-            # 대기 중인 작업이 없으면 의사결정 없이 대기
-            continue
-
-        # --- 4. 행동 공간(Action Space) 가용 액션 필터링 ---
-        # 0: Assign W1, 1: Assign W2, 2: Assign W3, 3: Hold, 4: Scale Out
-        available_actions = [3]  # HOLD(3)는 상시 가용
-        
-        with registry_lock:
-            # 각 노드 타입별로 IDLE 상태인 워커가 최소 1개 이상 존재할 때 태스크 배정 허용
-            if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in worker_registry.values()):
-                available_actions.append(0)
-            if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in worker_registry.values()):
-                available_actions.append(1)
-            if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in worker_registry.values()):
-                available_actions.append(2)
-                
-        # 최대 스케일 한도 내에서 SCALE_OUT(4) 기동 허용 (최대 Spot 각각 3대 제한)
-        if current_worker_2_scale < 3 or current_worker_3_scale < 3:
-            available_actions.append(4)
-
-        # Q-Learning 에이전트 액션 결정
-        action = agent.choose_action(state, available_actions)
-
-        # --- 5. 의사결정 액션 실행 제어 ---
-        if action in [0, 1, 2]:
-            # 태스크 할당 처리
-            target_type = ["on_demand", "spot_a", "spot_b"][action]
-            with queue_lock:
-                target_task = task_queue.pop(0)  # FIFO 큐 선입선출
-                
-            worker_id = None
-            worker_info = None
-            with registry_lock:
-                # 해당 타입에 해당하고 IDLE 상태인 워커를 찾아 선점
-                for wid, info in worker_registry.items():
-                    if info["node_type"] == target_type and info["status"] == "IDLE":
-                        worker_id = wid
-                        worker_info = info.copy()
-                        worker_registry[wid]["status"] = "BUSY"
-                        break
-            
-            if worker_info:
-                # 비동기 스레드를 실행하여 gRPC 작업 전달 및 갱신 수행
-                threading.Thread(
-                    target=run_task_on_worker,
-                    args=(worker_id, worker_info, target_task, state, action),
-                    daemon=True
-                ).start()
-            else:
-                # 노드가 갑자기 끊긴 경우 작업을 다시 큐로 반환
-                with queue_lock:
-                    task_queue.insert(0, target_task)
-
-        elif action == 3:
-            # HOLD 액션: 대기
-            print(f"[Scheduler Action] HOLD 상태 선택 (대기열 크기: {q_len} | 대기 페널티 발생 가능)")
-            
-        elif action == 4:
-            # SCALE_OUT 액션: Docker compose를 통한 Spot 컨테이너 동적 증설 트리거
-            # 큐 부하량이 많은 Spot 노드를 선정해 스케일아웃
-            if current_worker_2_scale <= current_worker_3_scale and current_worker_2_scale < 3:
-                current_worker_2_scale += 1
-                print(f"[Scheduler Action] SCALE_OUT 트리거 -> worker-2 (Spot-A) 대수 증설 지시 ({current_worker_2_scale}대)")
-                scale_workers("worker-2", current_worker_2_scale)
-            elif current_worker_3_scale < 3:
-                current_worker_3_scale += 1
-                print(f"[Scheduler Action] SCALE_OUT 트리거 -> worker-3 (Spot-B) 대수 증설 지시 ({current_worker_3_scale}대)")
-                scale_workers("worker-3", current_worker_3_scale)
-
-
-# --- 6. Head Node 메인 구동 루프 ---
 
 def serve():
-    port = os.environ.get("HEAD_PORT", str(DEFAULT_HEAD_PORT))
+    """
+    Head Node 메인 서비스 데몬을 구동합니다.
+    좀비 컨테이너 소거 비동기 스레드, 대시보드 웹 서버, gRPC 서버, Q-Learning 백그라운드 스케줄러 루프를 초기화합니다.
+    """
+    # 0. GCS 상태 파일 복구 (재시작 시 상태 원복을 위해 복구)
+    state.load_gcs_state()
+
+    # 0.1. 잔존 좀비 컨테이너 동기 청소 (부팅 전 이전 라이프사이클의 잔재 완전 소거를 통한 정합성 확보)
+    cluster_manager.cleanup_zombie_containers()
+    
+    # 0.2. 스팟 강제 회수(Eviction) 모니터링 백그라운드 루프 작동
+    cluster_manager.start_spot_eviction_loop() # cluster_manger.py 참고
+    
+    # 0.5. 실시간 GUI 모니터링 대시보드 서버 기동 (8080 포트)
+    dashboard.start_dashboard_server(port=8080, data_callback=get_dashboard_data)
+    
+    # 환경 변수에서 헤드 노드 포트를 읽어오고, 설정되지 않았을 경우 기본값 사용
+    port = os.environ.get("HEAD_PORT", str(DEFAULT_HEAD_PORT)) # 기본값: 8000
     
     # gRPC 서버 기동 (동시 접속 스레드풀 설정)
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))
+    # 최대 20개의 worker 생성
+    
     babyray_pb2_grpc.add_BabyRayServiceServicer_to_server(BabyRayHeadServicer(), server)
     server.add_insecure_port(f"[::]:{port}")
     server.start()
     print(f"=== [Head] Baby Ray 마스터 Node gRPC 서버 기동 완료 (포트: {port}) ===")
     
     # 백그라운드 Q-Learning 의사결정 스케줄러 스레드 기동
-    scheduler_thread = threading.Thread(target=scheduler_loop, daemon=True)
+    scheduler_thread = threading.Thread(target=scheduler.scheduler_loop, daemon=True)
     scheduler_thread.start()
     
+    is_shutting_down = False
+
+    def handle_shutdown(signum, frame):
+        nonlocal is_shutting_down
+        if is_shutting_down:
+            return
+        is_shutting_down = True
+        print(f"\n[Head] 종료 시그널 수신 (Signal: {signum}). Graceful Shutdown 시작...")
+        try:
+            server.stop(0)
+        except Exception:
+            pass
+        
+        # 공유 볼륨 내 임시/최종 가중치 파일 정리 (파일 누수 차단)
+        try:
+            import glob
+            print("[Head] 공유 볼륨 내 임시/최종 가중치 파일(.pt)들을 정리합니다...")
+            leftover_files = glob.glob("data/checkpoint_*.pt") + glob.glob("data/final_*.pt")
+            for f_path in leftover_files:
+                if os.path.exists(f_path):
+                    os.remove(f_path)
+            print(f"[Head] 총 {len(leftover_files)}개의 가중치 파일이 정리되었습니다.")
+        except Exception as e:
+            print(f"[Head] 공유 볼륨 정리 중 오류 발생: {e}")
+
+        try:
+            print("[Head] 기동 중인 모든 동적 스팟 워커 컨테이너들을 일괄 청소합니다...")
+            cluster_manager.cleanup_zombie_containers()
+        except Exception as e:
+            print(f"[Head] 동적 컨테이너 소거 실패: {e}")
+        print("[Head] Graceful Shutdown 완료. 프로세스를 안전하게 종료합니다.")
+        sys.exit(0)
+
+    # SIGINT(Ctrl+C) 및 SIGTERM(도커 정지) 등록
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
     try:
         while True:
             time.sleep(86400)
     except KeyboardInterrupt:
-        print("[Head] 서버 종료 시퀀스를 구동합니다...")
-        server.stop(0)
+        handle_shutdown(signal.SIGINT, None)
 
 if __name__ == '__main__':
     serve()

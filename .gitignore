@@ -1,8 +1,18 @@
 .idea/
+.vscode/
 __pycache__/
+*/__pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
+*.pyd
 .DS_Store
 *.egg-info/
 dist/
 build/
+.venv/
+venv/
+env/
+babyray_api_docs.html
+어려움 정리/
+

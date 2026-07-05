@@ -1,0 +1,24 @@
+# 1. Base Image: PyTorch 공식 CUDA 런타임 이미지 (무겁지만 GPU 사용 필수)
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 2. Worker 노드 필수 파이썬 패키지 설치 (docker, docker-cli 배제)
+RUN pip install --no-cache-dir \
+    grpcio>=1.60.0 \
+    grpcio-tools>=1.60.0 \
+    psutil>=5.9.0 \
+    pyyaml>=6.0 \
+    pandas>=2.0.0 \
+    matplotlib>=3.8.0 \
+    numpy>=1.26.0
+
+# 3. 소스 코드 복사
+COPY . .
+
+# 4. Protobuf 파일 자동 컴파일 및 패치
+RUN python compile_proto.py
+
+# 실행 명령어
+CMD ["python"]
