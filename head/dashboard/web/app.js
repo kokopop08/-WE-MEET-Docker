@@ -44,7 +44,7 @@ function createWorkerCard(wid, info) {
     const hbAge = Math.max(0, now - info.last_heartbeat).toFixed(1);
     const isWarning = hbAge > 5.0;
 
-    const statusClass = info.status === "IDLE" ? "status-idle" : "status-busy";
+    const statusClass = info.status === "IDLE" ? "status-idle" : (info.status === "LAUNCHING" ? "status-launching" : "status-busy");
     const typeClass = `type-${info.node_type}`;
     const typeName = info.node_type === "on_demand" ? "On-Demand" : (info.node_type === "spot_a" ? "Spot-A" : "Spot-B");
 
@@ -117,7 +117,7 @@ function updateWorkerCard(wid, card, info) {
     // Status 배지
     const statusBadge = card.querySelector(`#w-status-${wid}`);
     if (statusBadge) {
-        statusBadge.className = `worker-status ${info.status === "IDLE" ? "status-idle" : "status-busy"}`;
+        statusBadge.className = `worker-status ${info.status === "IDLE" ? "status-idle" : (info.status === "LAUNCHING" ? "status-launching" : "status-busy")}`;
         statusBadge.innerText = `${info.status} ${isWarning ? '(지연)' : ''}`;
     }
 
@@ -201,6 +201,21 @@ function reconcileWorkers(workersData) {
             const isFailureExit = hbAge > 3.0 || lastStatus.includes("BUSY") || lastStatus.includes("MAP") || lastStatus.includes("MERGE");
             
             card.classList.remove("scale-up-enter-active");
+            
+            // 즉각적인 시각 피드백: 퇴장 상태 텍스트로 오버라이드
+            const statusBadge = card.querySelector(`#w-status-${wid}`);
+            if (statusBadge) {
+                if (isFailureExit) {
+                    statusBadge.className = "worker-status status-busy exit-aborted-text";
+                    statusBadge.innerText = "ABORT (선점 회수)";
+                    card.style.borderColor = "var(--accent-red)";
+                } else {
+                    statusBadge.className = "worker-status status-idle exit-scalein-text";
+                    statusBadge.innerText = "SCALE-IN (순차 회수)";
+                    card.style.borderColor = "var(--accent-purple)";
+                }
+            }
+            
             if (isFailureExit) {
                 card.classList.add("scale-down-exit-active", "exit-failed");
             } else {

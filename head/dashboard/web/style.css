@@ -734,6 +734,32 @@ body {
     100% { left: 100%; }
 }
 
+.status-launching {
+    background: rgba(234, 179, 8, 0.08);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.22);
+    position: relative;
+    overflow: hidden;
+    animation: pulse-yellow-badge 1.2s infinite alternate;
+}
+
+@keyframes pulse-yellow-badge {
+    0% { opacity: 0.6; box-shadow: 0 0 4px rgba(234, 179, 8, 0.1); }
+    100% { opacity: 1; box-shadow: 0 0 10px rgba(234, 179, 8, 0.3); }
+}
+
+.exit-aborted-text {
+    background: rgba(244, 63, 94, 0.15) !important;
+    color: var(--accent-red) !important;
+    border: 1px solid rgba(244, 63, 94, 0.35) !important;
+}
+
+.exit-scalein-text {
+    background: rgba(139, 92, 246, 0.15) !important;
+    color: var(--accent-purple) !important;
+    border: 1px solid rgba(139, 92, 246, 0.35) !important;
+}
+
 .worker-stats {
     display: flex;
     flex-direction: column;

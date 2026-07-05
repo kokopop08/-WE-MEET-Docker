@@ -171,6 +171,29 @@ def get_dashboard_data():
     """
     with state.registry_lock:
         workers = {wid: info.copy() for wid, info in state.worker_registry.items()}
+        
+    # 도커 호스트 상에서 기동 중이지만 아직 등록되지 않은 (LAUNCHING) 워커 임시 감지 및 주입
+    if state.DOCKER_CLIENT is not None:
+        try:
+            containers = state.DOCKER_CLIENT.containers.list(all=True)
+            for c in containers:
+                c_name = c.name
+                if c_name.startswith("babyray-worker-2-") or c_name.startswith("babyray-worker-3-"):
+                    if c.status in ["running", "created"]:
+                        wid = c_name.replace("babyray-", "")
+                        if wid not in workers:
+                            node_type = "spot_a" if "worker-2-" in wid else "spot_b"
+                            workers[wid] = {
+                                "node_type": node_type,
+                                "status": "LAUNCHING",
+                                "port": 0,
+                                "cpu": 0.0,
+                                "mem": 0.0,
+                                "last_heartbeat": time.time()
+                            }
+        except Exception:
+            pass
+            
     with state.queue_lock:
         queue = [t.copy() for t in state.task_queue]
 
