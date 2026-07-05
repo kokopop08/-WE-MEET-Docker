@@ -549,7 +549,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     dashboard.log_event(f"[Merge Task 에러] 병합을 맡길 가용 워커가 존재하지 않습니다. 실패 처리.")
                     success = False
                     execution_time = time.time() - start_time
-        
+        else:
             # [일반 단일 워커 할당 분기]
             with gcs_state.registry_lock:
                 if worker_id in gcs_state.worker_registry:
@@ -773,5 +773,5 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 dashboard.log_event(f"[장애 복구] 작업 {task_id} 장애 유실 감지 -> 복구를 위해 대기 큐 재할당 (처음부터 재학습).")
                 
             with gcs_state.queue_lock:
-                gcs_state.task_queue.insert(0, task)
+                gcs_state.task_queue.append(task)
             gcs_state.save_gcs_state()

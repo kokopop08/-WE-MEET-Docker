@@ -139,8 +139,8 @@ def check_and_cleanup_dead_workers():
     if recovered_tasks:
         with gcs_state.queue_lock:
             for task in recovered_tasks:
-                gcs_state.task_queue.insert(0, task)
-                dashboard.log_event(f"[Lineage Recovery] !!! Cascaded Recovery 작동 !!! DEAD 워커에서 유실된 subtask '{task['task_id']}'를 대기열 0순위로 복구했습니다!")
+                gcs_state.task_queue.append(task)
+                dashboard.log_event(f"[Lineage Recovery] !!! Cascaded Recovery 작동 !!! DEAD 워커에서 유실된 subtask '{task['task_id']}'를 대기열 최하단으로 복구했습니다!")
         gcs_state.save_gcs_state()
             
         # Auto Scale-out 연동: 유실된 노드를 대체하기 위해 스팟 노드 증설 요청

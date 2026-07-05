@@ -3,7 +3,7 @@
  * ============================================================================== */
 
 const API_URL = "/api/status";
-let lastLogCount = 0;
+let lastLogMessage = "";
 const activeWorkersMap = new Map(); // workerId -> DOM Element mapping
 
 // 실시간 로그 하이라이팅 파서
@@ -482,7 +482,8 @@ async function updateDashboard() {
 
         // 6. Console Event Stream 갱신 및 Timeline 파서 작동
         const logs = data.logs || [];
-        if (logs.length !== lastLogCount) {
+        const latestLog = logs.length > 0 ? logs[logs.length - 1] : "";
+        if (latestLog !== lastLogMessage) {
             const consoleLogs = document.getElementById("console-logs");
             if (consoleLogs) {
                 let logsHtml = "";
@@ -492,7 +493,7 @@ async function updateDashboard() {
                 consoleLogs.innerHTML = logsHtml;
                 consoleLogs.scrollTop = consoleLogs.scrollHeight;
             }
-            lastLogCount = logs.length;
+            lastLogMessage = latestLog;
 
             // 실시간 타임라인 로그 추출 갱신
             updateScaleTimeline(logs);
