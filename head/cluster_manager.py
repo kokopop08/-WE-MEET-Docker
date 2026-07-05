@@ -69,6 +69,76 @@ def cleanup_zombie_containers():
         dashboard.log_event(f"[Docker SDK 에러] 잔존 컨테이너 조회 중 에러 발생: {e}")
 
 
+def _load_node_config(node_type):
+    """cost_model.yaml에서 노드 스펙 및 GPU 스케일 팩터를 단 한 번만 로드합니다."""
+    # Default fallback values
+    cpu_limit = 1.5 if node_type == "spot_a" else 0.8
+    mem_limit_mb = 1024 if node_type == "spot_a" else 512
+    gpu_scale = 0.85 if node_type == "spot_a" else 0.35
+    
+    cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
+    if os.path.exists(cost_model_path):
+        try:
+            import yaml
+            with open(cost_model_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                nodes = config.get("nodes", {})
+                if node_type in nodes:
+                    spec = nodes[node_type]
+                    cpu_limit = spec.get("cpu_limit", cpu_limit)
+                    mem_limit_mb = spec.get("memory_limit_mb", mem_limit_mb)
+                    gpu_scale = spec.get("gpu_scale_factor", gpu_scale)
+        except Exception as e:
+            print(f"[Docker SDK] cost_model.yaml 로드 오류: {e}")
+            
+    return cpu_limit, mem_limit_mb, gpu_scale
+
+def _find_available_port(base_port):
+    """GCS 레지스트리를 검사하여 포트 충돌이 없는 가용 포트를 반환합니다."""
+    with state.registry_lock:
+        existing_ports = [info["port"] for info in state.worker_registry.values()]
+        
+    candidate_port = base_port
+    while candidate_port in existing_ports:
+        candidate_port += 1
+    return candidate_port
+
+def _find_next_worker_index(base_id):
+    """GCS 레지스트리와 Docker 호스트의 실존 컨테이너를 스캔하여 빈 인덱스를 재활용(Recycling)합니다."""
+    existing_indices = []
+    
+    # 1. GCS 레지스트리 스캔
+    with state.registry_lock:
+        for wid in state.worker_registry.keys():
+            name_part = wid.split("@")[0] if "@" in wid else wid
+            if name_part.startswith(base_id + "-"):
+                try:
+                    idx = int(name_part.split("-")[-1])
+                    existing_indices.append(idx)
+                except ValueError:
+                    pass
+                    
+    # 2. Docker 호스트 스캔 (GCS 미등록 상태 컨테이너 방어)
+    try:
+        all_containers = state.DOCKER_CLIENT.containers.list(all=True)
+        for container in all_containers:
+            c_name = container.name
+            prefix = f"babyray-{base_id}-"
+            if c_name.startswith(prefix):
+                try:
+                    idx = int(c_name[len(prefix):])
+                    if idx not in existing_indices:
+                        existing_indices.append(idx)
+                except ValueError:
+                    pass
+    except Exception as e:
+        print(f"[Docker SDK 경고] 기존 컨테이너 인덱스 조회 실패: {e}")
+        
+    candidate_index = 1
+    while candidate_index in existing_indices:
+        candidate_index += 1
+    return candidate_index
+
 # spot_a,b 등의 worker를 하나 늘리는 scale - out
 def scale_out_worker(node_type):
     """
@@ -87,36 +157,15 @@ def scale_out_worker(node_type):
         return False
 
     # 0. 공급 부족(OutOfCapacity / Provisioning 거절) 30% 확률 모사
-    # 스팟 인스턴스 공급 부족 장애(OutOfCapacity) 현상을 소프트웨어적으로 시뮬레이션 (spot_a 및 spot_b 적용)
     if node_type in ["spot_a", "spot_b"] and random.random() < 0.3:
         dashboard.log_event(f"[Docker SDK] OutOfCapacity 감지: Spot-{node_type[-1].upper()} 자원 공급 부족으로 인해 노드 증설이 거절되었습니다.")
         return False
 
     try:
-        # cost_model.yaml에서 cGroup 한도 동적 로드
-        cpu_limit = 1.0 if node_type == "spot_a" else 0.5
-        mem_limit_mb = 1024 if node_type == "spot_a" else 512
-        
-        cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
-        if os.path.exists(cost_model_path):
-            try:
-                import yaml
-                with open(cost_model_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    nodes = config.get("nodes", {})
-                    if node_type in nodes:
-                        cpu_limit = nodes[node_type].get("cpu_limit", cpu_limit)
-                        mem_limit_mb = nodes[node_type].get("memory_limit_mb", mem_limit_mb)
-            except Exception as le:
-                print(f"[Docker SDK] cost_model.yaml 로드 오류: {le}")
-                
-        node_spec = {
-            "cpu_limit": cpu_limit,
-            "mem_limit": f"{int(mem_limit_mb)}m",
-            "port": 50060 if node_type == "spot_a" else 50070
-        }
+        # 1. 설정 및 자원 규격 단 1회 로드
+        cpu_limit, mem_limit_mb, gpu_scale = _load_node_config(node_type)
 
-        # 1. 호스트 자원 가드 -> 아까 만들었던 함수 safett guard
+        # 2. 호스트 자원 가드 검사
         if not is_host_resource_sufficient():
             print("[Docker SDK] 호스트 물리 메모리 부족으로 스케일아웃 기동을 안전하게 거부합니다.")
             return False
@@ -126,7 +175,7 @@ def scale_out_worker(node_type):
             print(f"[Global Resource Guard] 가용 GPU VRAM 부족 ({free_vram} MiB < 500 MiB). 스케일아웃을 보류합니다.")
             return False
 
-        # 2. 네트워크 자동 감지 - gRPC 통신을 위해서 head/worker가 같은 네트워크에 묶여야 함
+        # 3. 네트워크 자동 감지
         network_name = "babyray-net"
         try:
             head_container = state.DOCKER_CLIENT.containers.get("babyray-head")
@@ -137,56 +186,17 @@ def scale_out_worker(node_type):
         except Exception as e:
             print(f"[Docker SDK] 네트워크 자동 감지 실패, 기본값 '{network_name}' 사용: {e}")
 
-        # 3. 중복 포트 회피
-        with state.registry_lock:
-            existing_ports = [info["port"] for info in state.worker_registry.values()]
-
-        candidate_port = node_spec["port"]
-        while candidate_port in existing_ports:
-            candidate_port += 1
-
-        # 4. 고유 ID 및 컨테이너명 생성 (Index Recycling 메커니즘 적용)
-        # - 정상 흐름: 스케일 인 시 컨테이너가 삭제되면 빈자리(Gap) 번호를 1번부터 찾아 재활용합니다.
-        # - 예외 방어: GCS와 Docker 호스트 실존 컨테이너명을 교차 확인하여 이름 중복 충돌을 방지합니다.
+        # 4. 중복 포트 회피 및 인덱스 재활용 (Index Recycling)
+        base_port = 50060 if node_type == "spot_a" else 50070
+        candidate_port = _find_available_port(base_port)
+        
         base_id = "worker-2" if node_type == "spot_a" else "worker-3"
-        
-        with state.registry_lock:
-            # GCS 레지스트리에 등록된 순차 인덱스 추출
-            existing_indices = []
-            for wid in state.worker_registry.keys():
-                name_part = wid.split("@")[0] if "@" in wid else wid
-                if name_part.startswith(base_id + "-"):
-                    try:
-                        idx = int(name_part.split("-")[-1])
-                        existing_indices.append(idx)
-                    except ValueError:
-                        pass
-        
-        # Docker 호스트에 실제 존재하는(종료됐지만 미삭제 포함) 컨테이너 인덱스도 추출
-        try:
-            all_containers = state.DOCKER_CLIENT.containers.list(all=True)
-            for container in all_containers:
-                c_name = container.name  # e.g. "babyray-worker-2-1"
-                prefix = f"babyray-{base_id}-"
-                if c_name.startswith(prefix):
-                    try:
-                        idx = int(c_name[len(prefix):])
-                        if idx not in existing_indices:
-                            existing_indices.append(idx)
-                    except ValueError:
-                        pass
-        except Exception as e:
-            print(f"[Docker SDK 경고] 기존 컨테이너 인덱스 조회 실패: {e}")
-
-        # 1부터 시작하여 비어있는 가장 작은 번호(인덱스) 탐색 (Index Recycling)
-        candidate_index = 1
-        while candidate_index in existing_indices:
-            candidate_index += 1
+        candidate_index = _find_next_worker_index(base_id)
 
         worker_id = f"{base_id}-{candidate_index}"
         container_name = f"babyray-{worker_id}"
 
-        # 5. 실행 커맨드
+        # 5. 실행 커맨드 구성
         cmd = [
             "python", "-m", "worker.worker",
             "--id", worker_id,
@@ -203,22 +213,11 @@ def scale_out_worker(node_type):
                 docker.types.DeviceRequest(count=-1, capabilities=[['gpu']])
             ]
         except Exception:
-            device_requests = []
+            pass
 
-        # 6. 컨테이너 동적 생성 및 실행 (분리된 Worker 이미지 사용)
-        gpu_scale = 0.6 if node_type == "spot_a" else 0.3
-        if os.path.exists(cost_model_path):
-            try:
-                import yaml
-                with open(cost_model_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                    nodes = config.get("nodes", {})
-                    if node_type in nodes and "gpu_scale_factor" in nodes[node_type]:
-                        gpu_scale = nodes[node_type]["gpu_scale_factor"]
-            except Exception:
-                pass
         mps_percentage = str(int(gpu_scale * 100))
 
+        # 6. 컨테이너 동적 실행
         state.DOCKER_CLIENT.containers.run(
             image="babyray-worker-image:latest",
             name=container_name,
@@ -226,8 +225,8 @@ def scale_out_worker(node_type):
             detach=True,
             network=network_name,
             cpu_period=100000,
-            cpu_quota=int(node_spec["cpu_limit"] * 100000),
-            mem_limit=node_spec["mem_limit"],
+            cpu_quota=int(cpu_limit * 100000),
+            mem_limit=f"{int(mem_limit_mb)}m",
             device_requests=device_requests,
             environment={
                 "NODE_TYPE": node_type,

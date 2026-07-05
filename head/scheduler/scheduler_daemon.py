@@ -167,9 +167,9 @@ def generate_mock_tasks():
     model_types = ["CNN", "RNN", "LSTM"]
     
     # 4%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
-    # 96%의 확률로는 3%의 매우 낮은 확률로만 단일 태스크 유입
+    # 96%의 확률로는 6%의 낮은 확률로만 단일 태스크 유입
     is_burst = random.random() < 0.04
-    is_normal = not is_burst and (random.random() < 0.03)
+    is_normal = not is_burst and (random.random() < 0.06)
     
     if is_burst:
         num_new_tasks = random.randint(5, 8)
