@@ -1,0 +1,37 @@
+# 1. Base Image: 경량 Python slim 이미지 -> 최대한 소형 이미지를 사용
+FROM python:3.10-slim
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# 2. 필수 시스템 도구 설치 (curl, tar 등 - Docker CLI 설치용)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 3. Docker CLI 및 Docker Compose CLI 플러그인 설치 (Head가 컨테이너 제어하기 위해 필요) - Docker 안에 Docker가 있는 구조
+# Head는 다른 컨테이너, 즉 워커들을 생성, 관리, 소멸시키는 역할을 하므로 Docker 데몬에 직접 접근할 수 있는 CLI 도구가 필수적으로 포함되어야 합니다.
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-24.0.7.tgz | tar -xz -C /tmp \
+    && mv /tmp/docker/docker /usr/local/bin/ \
+    && rm -rf /tmp/docker
+RUN mkdir -p /usr/local/lib/docker/cli-plugins \
+    && curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+# 4. Head 노드 필수 파이썬 패키지만 설치 (무거운 torch 배제)
+RUN pip install --no-cache-dir \
+    grpcio>=1.60.0 \
+    grpcio-tools>=1.60.0 \
+    psutil>=5.9.0 \
+    docker>=7.0.0 \
+    pyyaml>=6.0
+
+# 5. 소스 코드 복사
+COPY . .
+
+# 6. Protobuf 파일 자동 컴파일 및 패치 - gRPC 통신을 위해 필요
+RUN python compile_proto.py
+
+# 실행 명령어
+CMD ["python", "-m", "head.head"]

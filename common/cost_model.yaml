@@ -1,0 +1,25 @@
+# ==============================================================================
+# WE-MEET: 노드 유형별 성능 격리 스펙 및 가상 요금 모델 (cost_model.yaml)
+# ==============================================================================
+
+nodes:
+  on_demand:
+    cpu_limit: 2.0
+    memory_limit_mb: 2048
+    cost_per_hour: 0.710  # AWS g4dn.xlarge 서울 리전 온디맨드 표준 단가 기준 ($0.71/Hour)
+    gpu_scale_factor: 1.0
+    preemption_probability: 0.0
+  spot_a:
+    cpu_limit: 1.5
+    memory_limit_mb: 1024
+    cost_per_hour: 0.220   # AWS g4dn.xlarge 스팟 요금에 1.5 코어 할인을 반영한 단가 ($0.22/Hour)
+    gpu_scale_factor: 0.85  # 성능 지향형 (85% GPU 할당)
+    preemption_probability: 0.50  # 고휘발성 선점 위험도
+  spot_b:
+    cpu_limit: 0.8
+    memory_limit_mb: 512
+    cost_per_hour: 0.120   # AWS g4dn.xlarge 스팟 요금에 0.8 코어 할인을 반영한 단가 ($0.12/Hour)
+    gpu_scale_factor: 0.35  # 안정 지향형 (35% GPU 할당)
+    preemption_probability: 0.10  # 저휘발성 선점 위험도 (매우 안정적)
+
+# preemption_probability = 스팟 인스턴스를 갑자기 강제 회수(선점/Eviction)하고 워커 노드를 셧다운시킬 확률

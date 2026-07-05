@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BabyRay Cluster Dashboard</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="background-glows">
+        <div class="glow glow-1"></div>
+        <div class="glow glow-2"></div>
+    </div>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-section">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                </div>
+                <div>
+                    <h1>BabyRay Master Controller</h1>
+                    <p>WE-MEET Q-Learning Cluster Monitoring Dashboard</p>
+                </div>
+            </div>
+            <div class="system-status online" id="status-container">
+                <div class="status-dot"></div>
+                <span id="status-text">GCS ONLINE</span>
+            </div>
+        </header>
+
+        <!-- Global Stats Board (새로 신설하여 정보 집약도 극대화) -->
+        <div class="stats-banner-row">
+            <div class="stat-banner-item">
+                <span class="stat-label">스케줄러 모드</span>
+                <strong class="stat-value text-blue" id="scheduler-mode-val">DYNAMIC</strong>
+            </div>
+            <div class="stat-banner-item">
+                <span class="stat-label">완료 태스크</span>
+                <strong class="stat-value text-green" id="completed-tasks-val">0</strong>
+            </div>
+            <div class="stat-banner-item">
+                <span class="stat-label">실패 태스크</span>
+                <strong class="stat-value text-red" id="failed-tasks-val">0</strong>
+            </div>
+            <div class="stat-banner-item">
+                <span class="stat-label">RL 탐험율 (Epsilon)</span>
+                <strong class="stat-value text-purple" id="rl-epsilon-val">0.00</strong>
+            </div>
+        </div>
+
+        <!-- Top Grid Cards -->
+        <div class="dashboard-grid">
+            <!-- Billing Card -->
+            <div class="card billing-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        가상 자산 & 과금 분석
+                    </span>
+                </div>
+                <div class="billing-content">
+                    <div class="billing-main-row">
+                        <div class="billing-item-main">
+                            <span class="billing-label">잔여 예산</span>
+                            <div class="budget-value-small" id="budget-val">
+                                $10.0000<span class="currency">USD</span>
+                            </div>
+                        </div>
+                        <div class="billing-item-main">
+                            <span class="billing-label">누적 소비 비용</span>
+                            <div class="budget-value-small spent-value" id="spent-val">
+                                $0.0000<span class="currency">USD</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="budget-progress-container">
+                        <div class="budget-progress-bar" id="budget-progress-bar"></div>
+                    </div>
+                    <div class="billing-sub-row">
+                        <div class="billing-sub-item">
+                            <span class="billing-sub-label">현재 시간당 소모 비용율</span>
+                            <strong class="billing-sub-value" id="hourly-rate-val">$0.000/hr</strong>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scale Event Timeline Card -->
+            <div class="card timeline-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        실시간 자원 변동 및 회수 이력
+                    </span>
+                </div>
+                <div class="timeline-content" id="scale-timeline-container">
+                    <div class="empty-timeline-placeholder">스케일 변동 이력이 아직 없습니다.</div>
+                </div>
+            </div>
+
+            <!-- Host Resource Card -->
+            <div class="card metrics-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z"/></svg>
+                        호스트 물리 리소스 메트릭
+                    </span>
+                </div>
+                <div class="resource-row">
+                    <div class="resource-item">
+                        <div class="resource-label">
+                            <span>Host CPU</span>
+                            <strong id="host-cpu-val">0.0%</strong>
+                        </div>
+                        <div class="resource-bar-bg">
+                            <div class="resource-bar-fill fill-blue" id="host-cpu-bar"></div>
+                        </div>
+                    </div>
+                    <div class="resource-item">
+                        <div class="resource-label">
+                            <span>Host RAM</span>
+                            <strong id="host-mem-val">0.0%</strong>
+                        </div>
+                        <div class="resource-bar-bg">
+                            <div class="resource-bar-fill fill-purple" id="host-mem-bar"></div>
+                        </div>
+                    </div>
+                    <div class="resource-item">
+                        <div class="resource-label">
+                            <span>GPU VRAM (Free)</span>
+                            <strong id="gpu-vram-val">N/A</strong>
+                        </div>
+                        <div class="resource-bar-bg">
+                            <div class="resource-bar-fill fill-green" id="gpu-vram-bar"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Middle Columns -->
+        <div class="main-section-grid">
+            <!-- Active Workers -->
+            <div class="card workers-panel">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                        액티브 워커 노드 토폴로지 (동적 분배)
+                    </span>
+                    <span class="badge" id="worker-count">총 0대 가동 중</span>
+                </div>
+                <div class="workers-split-container">
+                    <div class="workers-sub-panel">
+                        <h4 class="sub-panel-title">On-Demand 고신뢰 노드 풀</h4>
+                        <div class="workers-sub-grid" id="ondemand-container">
+                            <div class="empty-placeholder-mini">워커 감지 중...</div>
+                        </div>
+                    </div>
+                    <div class="workers-sub-panel">
+                        <h4 class="sub-panel-title">Spot 동적 확장 노드 풀</h4>
+                        <div class="workers-sub-grid" id="spot-container">
+                            <div class="empty-placeholder-mini">가용한 스팟 인스턴스가 없습니다.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Task Queue -->
+            <div class="card queue-panel">
+                <div class="card-header">
+                    <span class="card-title">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                        분산 태스크 대기열 (Queue)
+                    </span>
+                    <span class="badge badge-purple" id="queue-count">대기 0개</span>
+                </div>
+                <div class="queue-list" id="queue-container">
+                    <div class="empty-placeholder">
+                        <div class="empty-icon">📥</div>
+                        <p>대기열이 비어 있습니다.<br>클라이언트 부하 유입을 모니터링 중입니다.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Real-Time AI Inference Conclusions (최종 결론 패널 추가) -->
+        <div class="card conclusion-panel" style="margin-top: 24px;">
+            <div class="card-header">
+                <span class="card-title">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                    실시간 분산 AI 연산 및 최종 분석 결론 (FedAvg / 추론 종합)
+                </span>
+                <span class="badge badge-green" id="conclusion-count">결론 0개 도출</span>
+            </div>
+            <div class="conclusion-list" id="conclusion-container" style="max-height: 250px; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+                <div class="empty-placeholder">
+                    <div class="empty-icon">💡</div>
+                    <p>도출된 분석 결론이 없습니다.<br>분산 병합(Map-Merge) 연산 완료 시, 병합 및 다수결 결과가 여기에 실시간으로 기록됩니다.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Terminal Logs -->
+        <div class="card console-panel" style="margin-top: 24px;">
+            <div class="card-header">
+                <span class="card-title">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    실시간 클러스터 오케스트레이션 콘솔 이벤트 스트림
+                </span>
+                <span class="technical-label">Real-Time Event Stream</span>
+            </div>
+            <div class="console-window" id="console-logs">
+                <div class="console-line system-line">[System] 대시보드 콘솔 스트림 연결 성공. 이벤트를 파싱합니다.</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js"></script>
+</body>
+</html>

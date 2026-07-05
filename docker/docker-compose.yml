@@ -2,44 +2,61 @@ version: '3.8'
 
 networks:
   babyray-net:
-    driver: bridge
+    external: true
+
+volumes:
+  babyray-data:
+    name: babyray-data
 
 services:
   # GCS 및 Q-learning 스케줄러를 구동하는 Head 관리 노드
   head:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
-    image: babyray-image:latest
+      dockerfile: docker/Dockerfile.head
+    image: babyray-head-image:latest
     container_name: babyray-head
     command: python -m head.head
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # 호스트 Docker 데몬 연동
+      - babyray-data:/app/data # 공유 데이터 폴더 마운트
     ports:
       - "50051:50051" # gRPC 포트
+      - "8080:8080" # 모니터링 대시보드 포트 추가
     networks:
       - babyray-net
     environment:
       - NODE_TYPE=head
       - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
 
   # On-Demand 노드 (2 Cores, 2GB Memory, GPU 1.0 배율)
   worker-1:
-    image: babyray-image:latest
-    container_name: babyray-worker-1
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    image: babyray-worker-image:latest
+    container_name: babyray-on-demand
     depends_on:
       - head
     command: python -m worker.worker --id worker-1 --type on_demand --port 50052
+    volumes:
+      - babyray-data:/app/data # 공유 데이터 폴더 마운트
     deploy:
       resources:
         limits:
-          cpus: '2.0'
           memory: 2048M
         reservations:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     networks:
       - babyray-net
     environment:
@@ -47,28 +64,60 @@ services:
       - HEAD_HOST=head
       - HEAD_PORT=50051
       - PYTHONUNBUFFERED=1
+      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=100
+  # 도커 컨테이너를 실행(Run)하는 시점에 cluster_manager.py가 인자값과 
+  # 환경 변수로 각각 다르게 주입하여 완벽하게 제어합니다.
+  #
+  #  # Spot-A 노드 (1 Core, 1GB Memory, GPU 0.6 배율)
+  #  worker-2:
+  #    image: babyray-worker-image:latest
+  #    container_name: babyray-worker-2
+  #    depends_on:
+  #      - head
+  #    command: python -m worker.worker --id worker-2 --type spot_a --port 50053
+  #    deploy:
+  #      resources:
+  #        limits:
+  #          cpus: '1.0'
+  #          memory: 1024M
+  #        reservations:
+  #          devices:
+  #            - driver: nvidia
+  #              count: all
+  #              capabilities: [ gpu ]
+  #    networks:
+  #      - babyray-net
+  #    environment:
+  #      - NODE_TYPE=spot_a
+  #      - HEAD_HOST=head
+  #      - HEAD_PORT=50051
+  #      - PYTHONUNBUFFERED=1
 
-  # Spot-A 노드 (1 Core, 1GB Memory, GPU 0.6 배율)
-  worker-2:
-    image: babyray-image:latest
-    container_name: babyray-worker-2
-    depends_on:
-      - head
-    command: python -m worker.worker --id worker-2 --type spot_a --port 50053
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 1024M
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks:
-      - babyray-net
-    environment:
-      - NODE_TYPE=spot_a
-      - HEAD_HOST=head
-      - HEAD_PORT=50051
-      - PYTHONUNBUFFERED=1
+
+  # Spot-B 노드 (0.5 Core, 512MB Memory, GPU 0.3 배율) - 기본 번들 포함 (기본적으로 한대를 띄움)
+  #  worker-3:
+  #    image: babyray-worker-image:latest
+  #    container_name: babyray-worker-3
+  #    depends_on:
+  #      - head
+  #    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
+  #    volumes:
+  #      - babyray-data:/app/data # 공유 데이터 폴더 마운트
+  #    deploy:
+  #      resources:
+  #        limits:
+  #          cpus: '0.8'
+  #          memory: 768M
+  #        reservations:
+  #          devices:
+  #            - driver: nvidia
+  #              count: all
+  #              capabilities: [ gpu ]
+  #    networks:
+  #      - babyray-net
+  #    environment:
+  #      - NODE_TYPE=spot_b
+  #      - HEAD_HOST=head
+  #      - HEAD_PORT=50051
+  #      - PYTHONUNBUFFERED=1
+  #      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=35
