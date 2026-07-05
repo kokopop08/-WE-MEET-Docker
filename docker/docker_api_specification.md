@@ -125,16 +125,19 @@ def resize_container_resources(container_name, cpu_cores, memory_bytes):
         # 대상 컨테이너 객체를 도커로부터 조회해 옵니다.
         container = client.containers.get(container_name)
         
-        # 1. CPU 코어 개수를 도커가 인지할 수 있는 나노초(nano cpus) 단위로 환산합니다.
-        # 예: 0.5 CPU 코어 = 500,000,000 나노초 할당
-        nano_cpus = int(cpu_cores * 1_000_000_000)
+        # 1. CPU 코어 개수를 도커가 인지할 수 있는 cGroup 주기 및 시간(quota) 단위로 환산합니다.
+        # 예: 0.5 CPU 코어 = cpu_period 100,000 / cpu_quota 50,000
+        cpu_period = 100000
+        cpu_quota = int(cpu_cores * 100000)
         
         # 2. container.update() API는 실행 중인 컨테이너에 cGroup 설정을 즉각 반영하는 핵심 SDK 함수입니다.
-        # - nano_cpus: 컨테이너에 제한할 CPU 점유 상한
+        # - cpu_period: CFS 스케줄러 주기 (기본 100ms)
+        # - cpu_quota: 주기 내 허용할 최대 CPU 점유 마이크로초
         # - mem_limit: 컨테이너에 제한할 최대 메모리 바이트
         # - memswap_limit: 메모리 스왑 용량을 실제 메모리 한계와 일치시켜 가상 스왑 디스크의 오동작(OOM 우회)을 완벽 차단합니다.
         container.update(
-            nano_cpus=nano_cpus,
+            cpu_period=cpu_period,
+            cpu_quota=cpu_quota,
             mem_limit=memory_bytes,
             memswap_limit=memory_bytes
         )
@@ -153,7 +156,6 @@ def resize_container_resources(container_name, cpu_cores, memory_bytes):
 ### 라. Auto Scaling 동적 증설 및 회수 API (`scale_out_worker` / `scale_in_specific_worker`)
 - **역할**: Q-Learning 에이전트의 결정에 따라 자식 프로세스 명령어 호출 없이, Python Docker SDK 라이브러리를 직접 호출하여 컨테이너를 동적으로 가동(`containers.run`)하고 제거(`stop` & `remove`)합니다.
 
-```python
 ```python
 def scale_out_worker(node_type):
     """
@@ -238,7 +240,7 @@ Docker SDK가 제어하는 `nano_cpus` 및 `mem_limit` 파라미터는 리눅스
 
 ### ② 호스트 가용 메모리 계측 가드 (`is_host_resource_sufficient`)
 - **설계 의도**: Docker SDK의 `containers.run`을 다중 실행할 시, 호스트 실제 물리 메모리가 한계에 도달해 가상 머신(WSL2) 및 윈도우 OS 커널이 얼어붙는 현상을 방지합니다.
-- **동작 방식**: 스케일아웃 실행 전 `psutil.virtual_memory().available` 가 가상 임계치인 **2.0 GB** 아래로 떨어질 경우 도커 컨테이너 기동을 강제 차단 및 예외 보류시킵니다.
+- **동작 방식**: 스케일아웃 실행 전 `psutil.virtual_memory().percent`가 **85.0%**를 초과할 경우(WSL2 환경인 경우 내부 `free -b` 명령으로 보정 계측) 도커 컨테이너 기동을 강제 차단 및 예외 보류시킵니다.
 
 ### ③ GPU VRAM 감지 및 스케일아웃 제어 (`get_gpu_free_memory`)
 - **설계 의도**: `torch.cuda.is_available()` 상태에서 여러 컨테이너에 GPU 패스스루를 지정할 때, 물리 VRAM(8GB)이 고갈되어 CUDA 드라이버 패닉이 유발되는 것을 선제 예방합니다.

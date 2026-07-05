@@ -8,9 +8,6 @@ volumes:
   babyray-data:
     name: babyray-data
 
-
-
-
 services:
   # GCS 및 Q-learning 스케줄러를 구동하는 Head 관리 노드
   head:
@@ -54,8 +51,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.5'
-          memory: 1024M
+          memory: 2048M
         reservations:
           devices:
             - driver: nvidia
@@ -68,58 +64,60 @@ services:
       - HEAD_HOST=head
       - HEAD_PORT=50051
       - PYTHONUNBUFFERED=1
+      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=100
+  # 도커 컨테이너를 실행(Run)하는 시점에 cluster_manager.py가 인자값과 
+  # 환경 변수로 각각 다르게 주입하여 완벽하게 제어합니다.
+  #
+  #  # Spot-A 노드 (1 Core, 1GB Memory, GPU 0.6 배율)
+  #  worker-2:
+  #    image: babyray-worker-image:latest
+  #    container_name: babyray-worker-2
+  #    depends_on:
+  #      - head
+  #    command: python -m worker.worker --id worker-2 --type spot_a --port 50053
+  #    deploy:
+  #      resources:
+  #        limits:
+  #          cpus: '1.0'
+  #          memory: 1024M
+  #        reservations:
+  #          devices:
+  #            - driver: nvidia
+  #              count: all
+  #              capabilities: [ gpu ]
+  #    networks:
+  #      - babyray-net
+  #    environment:
+  #      - NODE_TYPE=spot_a
+  #      - HEAD_HOST=head
+  #      - HEAD_PORT=50051
+  #      - PYTHONUNBUFFERED=1
 
-# 도커 컨테이너를 실행(Run)하는 시점에 cluster_manager.py가 인자값과 
-# 환경 변수로 각각 다르게 주입하여 완벽하게 제어합니다.
-#
-#  # Spot-A 노드 (1 Core, 1GB Memory, GPU 0.6 배율)
-#  worker-2:
-#    image: babyray-worker-image:latest
-#    container_name: babyray-worker-2
-#    depends_on:
-#      - head
-#    command: python -m worker.worker --id worker-2 --type spot_a --port 50053
-#    deploy:
-#      resources:
-#        limits:
-#          cpus: '1.0'
-#          memory: 1024M
-#        reservations:
-#          devices:
-#            - driver: nvidia
-#              count: all
-#              capabilities: [ gpu ]
-#    networks:
-#      - babyray-net
-#    environment:
-#      - NODE_TYPE=spot_a
-#      - HEAD_HOST=head
-#      - HEAD_PORT=50051
-#      - PYTHONUNBUFFERED=1
-  # Spot-B 노드 (0.5 Core, 512MB Memory, GPU 0.3 배율) - 기본 번들 포함
-  worker-3:
-    image: babyray-worker-image:latest
-    container_name: babyray-worker-3
-    depends_on:
-      - head
-    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
-    volumes:
-      - babyray-data:/app/data # 공유 데이터 폴더 마운트
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [ gpu ]
-    networks:
-      - babyray-net
-    environment:
-      - NODE_TYPE=spot_b
-      - HEAD_HOST=head
-      - HEAD_PORT=50051
-      - PYTHONUNBUFFERED=1
 
+  # Spot-B 노드 (0.5 Core, 512MB Memory, GPU 0.3 배율) - 기본 번들 포함 (기본적으로 한대를 띄움)
+  #  worker-3:
+  #    image: babyray-worker-image:latest
+  #    container_name: babyray-worker-3
+  #    depends_on:
+  #      - head
+  #    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
+  #    volumes:
+  #      - babyray-data:/app/data # 공유 데이터 폴더 마운트
+  #    deploy:
+  #      resources:
+  #        limits:
+  #          cpus: '0.8'
+  #          memory: 768M
+  #        reservations:
+  #          devices:
+  #            - driver: nvidia
+  #              count: all
+  #              capabilities: [ gpu ]
+  #    networks:
+  #      - babyray-net
+  #    environment:
+  #      - NODE_TYPE=spot_b
+  #      - HEAD_HOST=head
+  #      - HEAD_PORT=50051
+  #      - PYTHONUNBUFFERED=1
+  #      - CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=35

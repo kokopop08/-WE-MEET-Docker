@@ -9,27 +9,7 @@ import random
 # 공유 상태 및 대시보드 모듈 임포트
 import head.state as state # state = 시스템의 전역 변수를 가지고 있음
 import head.dashboard.server as dashboard
-
-def get_gpu_free_memory():
-    """
-    [Global Host Resource Manager]
-    nvidia-smi 명령어를 호출하여 호스트 GPU의 가용 VRAM 용량(MiB)을 획득합니다.
-
-    Returns:
-        int: 가용 GPU VRAM 용량 (MiB 단위, GPU 드라이버 미인식 시 -1 반환).
-    """
-    try:
-        # nvidia-smi --query-gpu=memory.free --format=csv,nounits,noheader
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,nounits,noheader"],
-            capture_output=True, text=True, check=True
-        )
-        free_vram = int(result.stdout.strip())
-        return free_vram
-    # nvidia-smi 명령어를 사용해 GPU의 남은 메모리를 가져옴
-    except Exception:
-        # GPU 드라이버 미인식 시 모니터링 불가 상태로 간주 (-1 반환)
-        return -1
+from head.resource_guard import get_gpu_free_memory, is_host_resource_sufficient
 
 # SCALE-IN을 하는 데 핵심 -> 재시작시 죽지 않은 컨테이너 제거
 def cleanup_zombie_containers():
@@ -51,7 +31,8 @@ def cleanup_zombie_containers():
         for container in containers:
             c_name = container.name
             # worker-1: on-demand / worker-2: spot-a / worker-3: spot-b
-            if c_name.startswith("babyray-worker-2-") or c_name.startswith("babyray-worker-3-"):
+            # 끝에 대시(-)가 없는 고정 이름 형태("babyray-worker-2")도 매칭되도록 접두사 조건 보완
+            if c_name.startswith("babyray-worker-2") or c_name.startswith("babyray-worker-3"):
                 targets.append(container)
                 
         if not targets:
@@ -74,58 +55,19 @@ def cleanup_zombie_containers():
             t.start()
             threads.append(t)
             
-        # 모든 정리 작업이 4초 내에 끝나지 않으면 메인 스레드 진행 (타임아웃 방지)
+        # 모든 정리 작업이 완전히 끝나도록 병렬 조인 타임아웃을 넉넉히(10초) 설정
+        import time
+        start_time = time.time()
         for t in threads:
-            t.join(timeout=4.0)
+            elapsed = time.time() - start_time
+            remaining = max(0.1, 10.0 - elapsed)
+            t.join(timeout=remaining)
             
         dashboard.log_event(f"[Docker SDK] 총 {len(targets)}개의 잔존 컨테이너에 대해 강제 정리 명령을 병렬 전송했습니다.")
         
     except Exception as e:
         dashboard.log_event(f"[Docker SDK 에러] 잔존 컨테이너 조회 중 에러 발생: {e}")
 
-
-# Scale - out 하기 전에 자원이 충분한지 확인하는 함수 (Safety Guard)
-def is_host_resource_sufficient():
-    """
-    [Global Host Resource Manager]
-    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(85%)을 검증하여 과부하 방지 안전 여부를 판정합니다.
-
-    Returns:
-        bool: 호스트 물리 메모리 사용률이 85.0% 이하인 경우 True, 초과한 경우 False.
-    """
-    if os.environ.get("BYPASS_RESOURCE_GUARD", "0") == "1":
-        return True
-
-    # [Safety Guard 임계값 85.0% 상한선 선정 이유]
-    # RAM 전체 리소스 32GB 기준 85%를 소모할 시 가용 램 여유는 4.8GB가 됩니다.
-    # 사용자의 4GB 이상 안전 여유 공간 상한선 제약을 준수하고 버벅임 및 VM 다운을 방지하기 위해 85%로 고정했습니다.
-    try:
-        mem = psutil.virtual_memory()
-        usage_percent = mem.percent
-        
-        # WSL2 환경 검사 보정 (WSL2에서 메모리 한계를 잡은 경우 free 결과 보조 참고)
-        if os.name != 'nt':
-            try:
-                result = subprocess.run(["free", "-b"], capture_output=True, text=True, timeout=2)
-                lines = result.stdout.strip().splitlines()
-                for line in lines:
-                    if line.startswith("Mem:"):
-                        parts = line.split()
-                        if len(parts) >= 7:
-                            total = int(parts[1])
-                            available = int(parts[6])
-                            wsl_usage = ((total - available) / total) * 100.0
-                            usage_percent = max(usage_percent, wsl_usage)
-            except Exception:
-                pass
-
-        if usage_percent > 85.0:
-            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 85.0% (Safety Guard)")
-            return False
-        return True
-    except Exception as e:
-        print(f"[Global Resource Guard] 자원 점검 중 예외 발생: {e}")
-        return True
 
 # spot_a,b 등의 worker를 하나 늘리는 scale - out
 def scale_out_worker(node_type):
@@ -151,24 +93,28 @@ def scale_out_worker(node_type):
         return False
 
     try:
-        spec = {
-            "spot_a": {
-                "nano_cpus": 1000000000, # 1.0 Core
-                "mem_limit": "1024m",
-                "port": 50060
-            },
-            "spot_b": {
-                "nano_cpus": 500000000,  # 0.5 Core
-                "mem_limit": "512m",
-                "port": 50070            # Spot-B 전용 시작 포트 대역
-            }
+        # cost_model.yaml에서 cGroup 한도 동적 로드
+        cpu_limit = 1.0 if node_type == "spot_a" else 0.5
+        mem_limit_mb = 1024 if node_type == "spot_a" else 512
+        
+        cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
+        if os.path.exists(cost_model_path):
+            try:
+                import yaml
+                with open(cost_model_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    nodes = config.get("nodes", {})
+                    if node_type in nodes:
+                        cpu_limit = nodes[node_type].get("cpu_limit", cpu_limit)
+                        mem_limit_mb = nodes[node_type].get("memory_limit_mb", mem_limit_mb)
+            except Exception as le:
+                print(f"[Docker SDK] cost_model.yaml 로드 오류: {le}")
+                
+        node_spec = {
+            "cpu_limit": cpu_limit,
+            "mem_limit": f"{int(mem_limit_mb)}m",
+            "port": 50060 if node_type == "spot_a" else 50070
         }
-
-        if node_type not in spec:
-            print(f"[Docker SDK] 알 수 없는 노드 유형: {node_type}")
-            return False
-
-        node_spec = spec[node_type]
 
         # 1. 호스트 자원 가드 -> 아까 만들었던 함수 safett guard
         if not is_host_resource_sufficient():
@@ -260,20 +206,35 @@ def scale_out_worker(node_type):
             device_requests = []
 
         # 6. 컨테이너 동적 생성 및 실행 (분리된 Worker 이미지 사용)
+        gpu_scale = 0.6 if node_type == "spot_a" else 0.3
+        if os.path.exists(cost_model_path):
+            try:
+                import yaml
+                with open(cost_model_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    nodes = config.get("nodes", {})
+                    if node_type in nodes and "gpu_scale_factor" in nodes[node_type]:
+                        gpu_scale = nodes[node_type]["gpu_scale_factor"]
+            except Exception:
+                pass
+        mps_percentage = str(int(gpu_scale * 100))
+
         state.DOCKER_CLIENT.containers.run(
             image="babyray-worker-image:latest",
             name=container_name,
             command=cmd,
             detach=True,
             network=network_name,
-            nano_cpus=node_spec["nano_cpus"],
+            cpu_period=100000,
+            cpu_quota=int(node_spec["cpu_limit"] * 100000),
             mem_limit=node_spec["mem_limit"],
             device_requests=device_requests,
             environment={
                 "NODE_TYPE": node_type,
                 "HEAD_HOST": "babyray-head",
                 "HEAD_PORT": "50051",
-                "PYTHONUNBUFFERED": "1"
+                "PYTHONUNBUFFERED": "1",
+                "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE": mps_percentage
             },
             volumes={
                 "babyray-data": {"bind": "/app/data", "mode": "rw"}
@@ -405,19 +366,36 @@ def start_spot_eviction_loop():
                 dashboard.log_event("[Eviction Daemon] 호스트 메모리 부족 감지 -> 기존 Spot 워커 보호를 위해 강제 회수를 일시 중단(Freeze)합니다.")
                 continue
                 
+            # cost_model.yaml에서 preemption_probability 동적 로드
+            preemption_probs = {"spot_a": 0.5, "spot_b": 0.1}
+            cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
+            if os.path.exists(cost_model_path):
+                try:
+                    import yaml
+                    with open(cost_model_path, 'r', encoding='utf-8') as f:
+                        config = yaml.safe_load(f)
+                        nodes = config.get("nodes", {})
+                        for k, v in nodes.items():
+                            if "preemption_probability" in v:
+                                preemption_probs[k] = v["preemption_probability"]
+                except Exception:
+                    pass
+
             p_spot = 1 if (time.time() % 30.0) < 10.0 else 0
-            eviction_prob = 0.15 if p_spot == 1 else 0.05
             
             spot_workers = []
             with state.registry_lock:
                 for wid, info in state.worker_registry.items():
                     if info["node_type"] in ["spot_a", "spot_b"]:
-                        spot_workers.append(wid)
+                        spot_workers.append((wid, info["node_type"]))
             
             if not spot_workers:
                 continue
                 
-            for wid in spot_workers:
+            for wid, n_type in spot_workers:
+                base_prob = preemption_probs.get(n_type, 0.3)
+                eviction_prob = base_prob if p_spot == 1 else (base_prob * 0.25)
+                
                 if random.random() < eviction_prob:
                     container_ref = f"babyray-{wid}"
                     dashboard.log_event(f"[Eviction Daemon] !!! 스팟 강제 회수(Eviction) 발생 !!! -> 대상: {wid} (확률: {eviction_prob*100:.1f}%)")
@@ -438,3 +416,35 @@ def start_spot_eviction_loop():
                         dashboard.log_event(f"[Eviction Daemon 오류] 컨테이너 소거 중 실패: {e}")
 
     threading.Thread(target=eviction_loop, daemon=True).start()
+
+def resize_worker_resources(worker_id, cpu_limit, mem_limit_mb):
+    """
+    호스트 Docker SDK를 사용하여 실행 중인 워커 컨테이너의 cGroup 리소스 한도를 실시간으로 업데이트합니다.
+    """
+    if state.DOCKER_CLIENT is None:
+        return False, "Docker client unavailable"
+    
+    container_name = f"babyray-{worker_id}"
+    if worker_id == "worker-1":
+        container_name = "babyray-on-demand"
+    elif worker_id == "worker-3":
+        container_name = "babyray-worker-3"
+        
+    try:
+        container = state.DOCKER_CLIENT.containers.get(container_name)
+        mem_limit_bytes = int(mem_limit_mb * 1024 * 1024)
+        cpu_period = 100000
+        cpu_quota = int(cpu_limit * 100000)
+        
+        # Docker SDK container update 호출
+        container.update(
+            cpu_period=cpu_period,
+            cpu_quota=cpu_quota,
+            mem_limit=mem_limit_bytes,
+            memswap_limit=mem_limit_bytes
+        )
+        print(f"[Docker SDK] cGroup 자원 크기 업데이트 성공 -> {container_name} | CPU: {cpu_limit} Cores (quota: {cpu_quota}), Mem: {mem_limit_mb} MB")
+        return True, "Success"
+    except Exception as e:
+        print(f"[Docker SDK 에러] cGroup 자원 업데이트 실패 -> {container_name}: {e}")
+        return False, str(e)

@@ -7,15 +7,15 @@ import threading
 worker_registry = {} # 인메모리 캐시
 """dict: 활성 워커들의 상세 상태 정보를 저장하는 글로벌 Control Store 맵."""
 
-registry_lock = threading.Lock() # 인메모리 캐시 접근을 위한 락
-"""threading.Lock: worker_registry의 스레드 안전성을 확보하기 위한 뮤텍스 락."""
+registry_lock = threading.RLock() # 인메모리 캐시 접근을 위한 락
+"""threading.RLock: worker_registry의 스레드 안전성을 확보하기 위한 뮤텍스 락."""
 
 # 가상 태스크 대기열 (Task Queue)
 task_queue = [] # 스케줄링을 대기하는 태스크 리스트
 """list: 스케줄링을 대기하는 태스크 리스트."""
 
-queue_lock = threading.Lock() # 큐에 접근하는 경우 경쟁 상태를 방지하기 위한 락
-"""threading.Lock: task_queue 접근을 제어하기 위한 뮤텍스 락."""
+queue_lock = threading.RLock() # 큐에 접근하는 경우 경쟁 상태를 방지하기 위한 락
+"""threading.RLock: task_queue 접근을 제어하기 위한 뮤텍스 락."""
 
 # 태스크 상태 및 캐시 관리 GCS 레지스트리
 task_status = {}
@@ -93,9 +93,28 @@ def load_gcs_state():
                 with open(STATE_FILE, "r", encoding="utf-8") as f:
                     state_data = json.load(f)
                 
-                # 값 복원
+                # 값 복원 및 마감 기한(Deadline) 현재 시간 기준으로 보정 (시프트)
+                import time
+                current_time = time.time()
+                loaded_queue = state_data.get("task_queue", [])
+                for task in loaded_queue:
+                    try:
+                        if "deadline" in task and "enqueue_time" in task:
+                            duration = task["deadline"] - task["enqueue_time"]
+                            # 비정상 값이거나 음수일 경우 기본 60초 보정
+                            if duration <= 0:
+                                duration = 60.0
+                            task["deadline"] = current_time + duration
+                            task["enqueue_time"] = current_time
+                        else:
+                            task["deadline"] = current_time + 60.0
+                            task["enqueue_time"] = current_time
+                    except Exception:
+                        task["deadline"] = current_time + 60.0
+                        task["enqueue_time"] = current_time
+                
                 task_queue.clear()
-                task_queue.extend(state_data.get("task_queue", []))
+                task_queue.extend(loaded_queue)
                 
                 task_status.clear()
                 task_status.update(state_data.get("task_status", {}))

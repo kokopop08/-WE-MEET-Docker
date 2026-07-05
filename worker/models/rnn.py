@@ -43,11 +43,11 @@ class RNNTask(BaseTask):
         loss_val = 0.0
         for step in range(SEQ_NUM_BATCHES):
             start_x = step * 0.5
-            x = torch.linspace(start_x, start_x + 5.0, SEQ_BATCH_SIZE * (SEQ_LENGTH + 1)).view(SEQ_BATCH_SIZE, SEQ_LENGTH + 1)
+            x = torch.linspace(start_x, start_x + 5.0, SEQ_BATCH_SIZE * (SEQ_LENGTH + 1), device=device).view(SEQ_BATCH_SIZE, SEQ_LENGTH + 1)
             y = torch.sin(x)
             
-            inputs = y[:, :-1].unsqueeze(-1).to(device)
-            targets = y[:, -1].unsqueeze(-1).to(device)
+            inputs = y[:, :-1].unsqueeze(-1)
+            targets = y[:, -1].unsqueeze(-1)
             
             optimizer.zero_grad()
             outputs = model(inputs)

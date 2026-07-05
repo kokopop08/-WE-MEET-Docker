@@ -43,7 +43,8 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 spot_scale -= 1
                 empty_queue_duration = 0.0
 
-    # 2. Q-Learning 의사결정 루프
+    # 2. Q-Learning 의사결정 루프 (Backfilling 적용)
+    deferred_tasks = []
     while True:
         with gcs_state.queue_lock:
             q_len_real = len(gcs_state.task_queue)
@@ -142,9 +143,8 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     daemon=True
                 ).start()
             else:
-                with gcs_state.queue_lock:
-                    gcs_state.task_queue.insert(0, target_task)
-                break
+                # 백필링 적용: 현재 선택된 액션 타입의 노드가 가용하지 않으므로 보류하고 탐크 탐색 계속 진행
+                deferred_tasks.append(target_task)
             
         elif action == 3:
             dashboard.log_event(f"[Q-Learning Action] HOLD 상태 선택 (대기열 크기: {q_len_real})")
@@ -176,5 +176,11 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     spot_scale += 1
             break
             
+    # 보류된 태스크들의 순서를 유지하여 대기열로 환원 복원
+    if deferred_tasks:
+        with gcs_state.queue_lock:
+            for task in reversed(deferred_tasks):
+                gcs_state.task_queue.insert(0, task)
+                
     return empty_queue_duration
 

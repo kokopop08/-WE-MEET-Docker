@@ -9,7 +9,7 @@ CNN_NUM_BATCHES = 4
 CNN_IMAGE_SIZE = 28
 CNN_NUM_CLASSES = 10
 
-def get_inline_mnist_dataset():
+def get_inline_mnist_dataset(device='cpu'):
     """
     외부 네트워크 다운로드 없이, 파이썬 파일 임포트 형태로 
     즉시 연산 가능한 0~9 손글씨 모사 28x28 픽셀 패턴 데이터셋을 반환합니다.
@@ -19,7 +19,7 @@ def get_inline_mnist_dataset():
     
     for digit in range(10):
         # 28x28 픽셀 맵
-        img = torch.zeros(1, 28, 28)
+        img = torch.zeros(1, 28, 28, device=device)
         
         # 각 숫자의 전형적인 뼈대 픽셀을 명시적으로 활성화
         if digit == 0:
@@ -71,7 +71,7 @@ def get_inline_mnist_dataset():
             img[0, 5:23, 22] = 1.0
             
         images.append(img)
-        labels.append(torch.tensor(digit, dtype=torch.long))
+        labels.append(torch.tensor(digit, dtype=torch.long, device=device))
         
     # 배치 형성을 위해 데이터셋 샘플을 적당히 복제하여 증강 반환
     return torch.stack(images * 4), torch.stack(labels * 4)
@@ -104,6 +104,8 @@ class CNNTask(BaseTask):
     """CNN 이미지 분류 학습 및 추론 Task 클래스"""
     def __init__(self):
         super().__init__()
+        self.images = None
+        self.targets = None
 
     def get_model(self):
         return CNNModel()
@@ -112,16 +114,16 @@ class CNNTask(BaseTask):
         return nn.CrossEntropyLoss()
 
     def train_epoch(self, model, optimizer, criterion, device):
-        # 인라인으로 구현된 로컬 손글씨 모사 픽셀 데이터셋 임포트
-        images, targets = get_inline_mnist_dataset()
-        images, targets = images.to(device), targets.to(device)
+        # 인라인으로 구현된 로컬 손글씨 모사 픽셀 데이터셋을 GPU 상에 직접 캐싱/재사용
+        if self.images is None or self.images.device != torch.device(device):
+            self.images, self.targets = get_inline_mnist_dataset(device)
         
         loss_val = 0.0
         for _ in range(CNN_NUM_BATCHES):
             # 난수 셔플 인덱싱으로 배치 분할
-            indices = torch.randperm(images.size(0))[:CNN_BATCH_SIZE]
-            inputs = images[indices]
-            batch_targets = targets[indices]
+            indices = torch.randperm(self.images.size(0))[:CNN_BATCH_SIZE]
+            inputs = self.images[indices]
+            batch_targets = self.targets[indices]
             
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -137,8 +139,9 @@ class CNNTask(BaseTask):
         try:
             with torch.no_grad():
                 # 인라인 데이터셋 생성 후 숫자 '3'에 대응하는 패턴 이미지 추출
-                images, _ = get_inline_mnist_dataset()
-                test_img = images[3:4].to(device) # [1, 1, 28, 28]
+                if self.images is None or self.images.device != torch.device(device):
+                    self.images, self.targets = get_inline_mnist_dataset(device)
+                test_img = self.images[3:4] # [1, 1, 28, 28]
                 
                 out = model(test_img)
                 prob = torch.softmax(out, dim=1)

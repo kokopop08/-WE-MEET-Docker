@@ -279,13 +279,8 @@ class PyTorchTaskRunner:
                 torch.cuda.synchronize()
 
             actual_time = time.time() - epoch_start
-            target_time = actual_time / self.speed_factor
-            delay = target_time - actual_time
-            if delay > 0:
-                time.sleep(delay)
-
-            epoch_total_time = actual_time + max(0.0, delay)
-            log_line = f"Epoch {epoch+1}/{self.epochs} - Loss: {loss:.4f} - 연산시간: {actual_time:.4f}초 (지연: {max(0.0, delay):.4f}초, 총 {epoch_total_time:.2f}초)"
+            epoch_total_time = actual_time
+            log_line = f"Epoch {epoch+1}/{self.epochs} - Loss: {loss:.4f} - 연산시간: {actual_time:.4f}초"
             self.logs.append(log_line)
             print(f"[Worker Task] {self.task_id} | {log_line}")
             self.progress = ((epoch + 1) / self.epochs) * 100.0

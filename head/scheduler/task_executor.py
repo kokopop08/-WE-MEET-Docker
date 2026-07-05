@@ -26,6 +26,92 @@ from head.q_learning.agent import QLearningAgent
 COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../common/cost_model.yaml'))
 agent = QLearningAgent(cost_model_path=COST_MODEL_PATH)
 
+def log_benchmark_metric(scheduler_mode, task_id, model_type, status, execution_time, cost, delay, virtual_budget):
+    """
+    data/benchmark_results.csv 파일에 3대 스케줄러의 성능 비교 데이터를 누적 기록합니다.
+    """
+    csv_file = "data/benchmark_results.csv"
+    try:
+        os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+        file_exists = os.path.exists(csv_file)
+        
+        # 기동 중인 워커 수 계측
+        active_od = 0
+        active_spot_a = 0
+        active_spot_b = 0
+        with gcs_state.registry_lock:
+            for info in gcs_state.worker_registry.values():
+                ntype = info.get("node_type", "on_demand").lower()
+                if ntype == "on_demand":
+                    active_od += 1
+                elif ntype == "spot_a":
+                    active_spot_a += 1
+                elif ntype == "spot_b":
+                    active_spot_b += 1
+                    
+        import csv
+        with open(csv_file, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                # 헤더 작성
+                writer.writerow([
+                    "timestamp", "scheduler_mode", "task_id", "model_type", "status",
+                    "execution_time", "cost", "delay", "active_od", "active_spot_a",
+                    "active_spot_b", "virtual_budget"
+                ])
+            # 데이터 로깅
+            writer.writerow([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                scheduler_mode,
+                task_id,
+                model_type,
+                status,
+                round(execution_time, 4),
+                round(cost, 6),
+                round(delay, 4),
+                active_od,
+                active_spot_a,
+                active_spot_b,
+                round(virtual_budget, 6)
+            ])
+    except Exception as e:
+        print(f"[Benchmark Logger 경고] 결과 CSV 파일 저장 실패: {e}")
+
+def adjust_worker_resources(wid, wtype, model_type, is_restore=False, channel=None):
+    """
+    태스크 모델 유형에 따라 워커 노드의 cGroup 리소스 한도를 동적으로 조정합니다.
+    - LSTM(메모리 집약형): 메모리 한도를 1.5배 임시 확장
+    - CNN/RNN/MERGE: 기본 규격 크기로 유지/복원
+    """
+    # 온디맨드 노드(worker-1)는 동적 리사이징 대상에서 제외하여 정적 2GB 상태를 안정적으로 유지합니다.
+    if wid == "worker-1":
+        return
+        
+    cost_profile = agent.nodes_config.get(wtype, {})
+    cpu_limit = cost_profile.get("cpu_limit", 1.0)
+    mem_limit_mb = cost_profile.get("memory_limit_mb", 1024)
+    
+    if not is_restore and model_type.upper() == "LSTM":
+        target_mem = int(mem_limit_mb * 1.5)
+    else:
+        target_mem = mem_limit_mb
+    target_cpu = cpu_limit
+    
+    # 1. 호스트 Docker cGroup 리사이징 수행
+    import head.cluster_manager as cluster_manager
+    cluster_manager.resize_worker_resources(wid, target_cpu, target_mem)
+    
+    # 2. 워커 원격 노티 gRPC 통신 전송
+    if channel:
+        try:
+            stub = babyray_pb2_grpc.BabyRayServiceStub(channel)
+            stub.ResizeResources(babyray_pb2.ResizeRequest(
+                cpu_cores=target_cpu,
+                memory_bytes=target_mem * 1024 * 1024
+            ), timeout=1.0)
+        except Exception as e:
+            print(f"[gRPC Resize 경고] {wid} 자원 조정 노티 실패: {e}")
+
 def run_task_on_worker(worker_id, worker_info, task, state, action):
     """
     [Task 실행 및 강화학습 피드백 스레드 (공통 유틸리티)]
@@ -133,6 +219,9 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     sub_channel = grpc.insecure_channel(sub_address)
                     sub_stub = babyray_pb2_grpc.BabyRayServiceStub(sub_channel)
                     
+                    # 동적 cGroup 리소스 리사이징 적용
+                    adjust_worker_resources(w_id, w_info["node_type"], model_type, is_restore=False, channel=sub_channel)
+                    
                     res = sub_stub.AssignTask(babyray_pb2.TaskAssignment(
                         task_id=sub_task_id,
                         model_type=model_type,
@@ -156,6 +245,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                             dashboard.log_event(f"[{w_id}] {line.strip()}")
                                             if any(tag in line for tag in ["[CNN Inference Done]", "[RNN Forecast Done]", "[LSTM Generation Done]"]):
                                                 inference_log = line.strip()
+                                math_concl = ""
                                 with gcs_state.registry_lock:
                                     if sub_task_id in gcs_state.task_lineage:
                                         gcs_state.task_lineage[sub_task_id]["status"] = "SUCCESS"
@@ -176,6 +266,12 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                             gcs_state.task_lineage[sub_task_id]["status"] = "FAILED"
                     gcs_state.save_gcs_state()
                 finally:
+                    # 동적 cGroup 리소스 원복 복원
+                    try:
+                        adjust_worker_resources(w_id, w_info["node_type"], model_type, is_restore=True, channel=sub_channel)
+                    except Exception:
+                        pass
+                        
                     with gcs_state.registry_lock:
                         if w_id in gcs_state.worker_registry:
                             # 주체 워커(worker_id)는 Map-Reduce가 완전히 끝날 때까지 IDLE로 복구하지 않고 점유 상태(BUSY)를 유지합니다.
@@ -224,12 +320,12 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                         break # 가용 워커가 소진되면 다음 시도로 이월
                         
                     wid, winfo = available_idle_workers[idx_in_pending]
+                    sub_task_id = f"{task_id}-map-{sub_idx}"
                     
                     with gcs_state.registry_lock:
                         if wid in gcs_state.worker_registry:
-                            gcs_state.worker_registry[wid]["status"] = "BUSY"
+                            gcs_state.worker_registry[wid]["status"] = f"MAP ({sub_task_id})"
                             
-                    sub_task_id = f"{task_id}-map-{sub_idx}"
                     sub_ep = sub_epochs + (remainder if sub_idx == 0 else 0)
                     
                     with gcs_state.registry_lock:
@@ -277,7 +373,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     if worker_id in gcs_state.worker_registry and gcs_state.worker_registry[worker_id]["node_type"] == "on_demand":
                         reduce_worker_id = worker_id
                         reduce_worker_info = gcs_state.worker_registry[worker_id].copy()
-                        gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
+                        gcs_state.worker_registry[reduce_worker_id]["status"] = f"MERGE ({reduce_task_id})"
                 
                 if not reduce_worker_id:
                     while True:
@@ -288,7 +384,7 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                             ]
                             if on_demand_candidates:
                                 reduce_worker_id, reduce_worker_info = on_demand_candidates[0]
-                                gcs_state.worker_registry[reduce_worker_id]["status"] = "BUSY"
+                                gcs_state.worker_registry[reduce_worker_id]["status"] = f"MERGE ({reduce_task_id})"
                                 break
                         dashboard.log_event(f"[Merge Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중...")
                         time.sleep(1.0)
@@ -454,8 +550,11 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     success = False
                     execution_time = time.time() - start_time
         
-        else:
             # [일반 단일 워커 할당 분기]
+            with gcs_state.registry_lock:
+                if worker_id in gcs_state.worker_registry:
+                    gcs_state.worker_registry[worker_id]["status"] = f"BUSY ({task_id})"
+                    
             channel = grpc.insecure_channel(worker_address)
             stub = babyray_pb2_grpc.BabyRayServiceStub(channel)
             
@@ -465,6 +564,9 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 job_id = task.get("job_id", "")
                 dataset_path = f"merge:data/final_{job_id}-map-1.pt,data/final_{job_id}-map-2.pt,data/final_{job_id}-map-3.pt"
                 
+            # 동적 cGroup 리소스 리사이징 적용
+            adjust_worker_resources(worker_id, worker_info["node_type"], model_type, is_restore=False, channel=channel)
+            
             result = stub.AssignTask(babyray_pb2.TaskAssignment(
                 task_id=task_id,
                 model_type=model_type,
@@ -535,7 +637,19 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
         dashboard.log_event(f"[Scheduler Feedback 에러] 워커 '{worker_id}' 실행 중 통신 크래시 감지: {e}")
         success = False
         execution_time = time.time() - task["enqueue_time"]
+    except Exception as ex:
+        import traceback
+        tb = traceback.format_exc()
+        dashboard.log_event(f"[Scheduler Error] Unexpected error running task {task_id} on {worker_id}: {ex}\n{tb}")
+        success = False
+        execution_time = time.time() - start_time
     finally:
+        # 동적 cGroup 리소스 원복 복원
+        try:
+            adjust_worker_resources(worker_id, worker_info["node_type"], model_type, is_restore=True, channel=None)
+        except Exception:
+            pass
+            
         # GCS 워커 노드 상태 복구
         with gcs_state.registry_lock:
             if worker_id in gcs_state.worker_registry:
@@ -626,6 +740,18 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             dashboard.log_event(f"[Q-Learning Update] 잔여 가상 예산: ${gcs_state.virtual_budget:.4f}달러")
         else:
             dashboard.log_event(f"[Resource Spend] [Mode: {gcs_state.SCHEDULER_MODE}] 비용 차감: ${task_cost:.4f} | 잔여 예산: ${gcs_state.virtual_budget:.4f}")
+        
+        # 자동 실험 데이터 누적 기록 (Benchmark Logger)
+        log_benchmark_metric(
+            scheduler_mode=gcs_state.SCHEDULER_MODE,
+            task_id=task_id,
+            model_type=model_type,
+            status="SUCCESS" if success else "FAILED",
+            execution_time=execution_time,
+            cost=task_cost,
+            delay=delay_time,
+            virtual_budget=gcs_state.virtual_budget
+        )
         
         # 실패 시 복구 재삽입
         if not success:

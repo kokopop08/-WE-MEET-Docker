@@ -4,6 +4,45 @@
 
 ---
 
+## 📅 2026-07-05 패치 내역
+
+### 1. [실험 데이터 수집/벤치마크] 자동 실험 데이터 누적 기록 (Benchmark Metric Logger) 도입
+* **해결 및 패치 내용:**
+  - 3대 스케줄러(Static, Dynamic, Q-Learning)의 성능, 비용, SLA 지연시간 변동을 일관되게 비교 검증할 수 있도록 `head/scheduler/utils.py` 내부에 `log_benchmark_metric()` 함수를 신설했습니다.
+  - 태스크가 완료(SUCCESS)되거나 실패(FAILED/Eviction)하는 매 시점마다 **Timestamp, 모드, 태스크 ID, 모델 종류, 상태, 수행시간, 가상 비용, SLA 초과 지연 초, 활성 온디맨드/스팟A/스팟B 대수, 남은 예산**을 `data/benchmark_results.csv` 파일 끝에 실시간 누적 적재합니다.
+  - 마운트된 볼륨 내에 저장된 데이터를 호스트 파일시스템 영역으로 즉시 공유 연동하여, 사용자가 외부 분석기 없이도 판다스(Pandas)나 엑셀로 원천 데이터를 분석할 수 있는 환경을 제공합니다.
+
+### 2. [Dynamic 스케줄러/오토스케일링] 부하 및 모형 적응형 이종 스팟 인스턴스 스케일 제어 구현
+* **해결 및 패치 내용:**
+  - 기존 Dynamic 스케줄러가 비용 효율이 떨어지는 Spot-A만 고정 증설/회수하던 방식을 전면 리팩토링했습니다.
+  - **이종 적응형 스케일아웃**: 평균 리소스 부하가 매우 높거나(CPU > 75% 또는 Memory > 70%), 대기 큐 내에 메모리 오버헤드가 막중한 `LSTM` 태스크가 포함된 경우에만 고성능 **Spot-A**를 증설하고, 그 외의 일반 적체 상황에서는 비용 효율적인 **Spot-B**를 증설하도록 개편했습니다.
+  - **비용 최적화 스케일인**: 유휴 상태로 진입 시 단가가 비싼 **Spot-A를 최우선으로 회수**하고, Spot-A가 전량 감축된 이후 Spot-B를 회수하여 시간당 요금 소모 속도(Burn Rate) 방어력을 향상시켰습니다.
+  - GCS 스팟 대수 합산 함수(`get_current_spot_scale` in `core.py`)가 Spot-A와 Spot-B 모두의 누적 기동 대수를 집계하도록 수정하여 전체 스팟 인프라 상한선(`MAX_SPOT_SCALE`) 제한의 안정성을 보장했습니다.
+
+### 3. [스케줄러/HOL Blocking 해소] 비순차 백필링 (Backfilling) 알고리즘 탑재
+* **해결 및 패치 내용:**
+  - 가용 자원이나 특정 노드 타입의 부족으로 대기열 맨 앞의 태스크가 배정되지 못해 락에 빠지는 **HOL(Head-of-Line) Blocking** 현상을 해결하기 위해 백필링 정책을 수립했습니다.
+  - Dynamic 스케줄러(`head/scheduler/dynamic.py`) 및 Q-Learning 스케줄러(`head/q_learning/scheduler.py`) 의사결정 루프를 수정하여, 배정 실패한 태스크를 보류열(`deferred_tasks`)로 우회 적재한 뒤 후순위 대기 태스크들의 가용 노드 매핑 및 선제 할당 작업을 지속합니다.
+  - 큐 탐색이 완료되면 보류되었던 태스크들을 원래의 선입선출(FIFO) 우선순위 순서를 보존하여 큐 선두로 다시 적재(`insert(0, task)`)함으로써 기아 현상(Starvation)을 방지합니다.
+
+### 4. [리소스 격리/cGroup 리사이징] CFS 주기 기반 Docker CPU 동적 크기 조절 구현 및 409 충돌 해결
+* **해결 및 패치 내용:**
+  - 메모리 집약형 `LSTM` 태스크 기동 시 해당 워커의 cGroup 메모리 한도를 `1.5배` 임시 상향(Spot-B 기준 768MB -> 1152MB) 조정하고, 태스크 완료 시 원본 규격으로 복원하도록 `head/scheduler/utils.py` 내부에 `adjust_worker_resources()` 리사이징 프로토콜을 구현했습니다.
+  - **409 Conflict 오류 완벽 해결**: 최초 기동 시 `--cpus`(NanoCPUs) 제한 인자가 주입된 컨테이너는 Docker Engine 명세상 실행 중에 `cpu_quota` / `cpu_period` 업데이트가 원천 금지되는 제약이 있었습니다.
+  - 이를 위해 `docker-compose.yml` 및 `cluster_manager.py` 내의 컨테이너 초기 기동 시점의 NanoCPUs 설정을 전면 걷어내고, CFS 스케줄러 주기(`cpu_period=100000`, `cpu_quota=int(cpu_limit * 100000)`) 단위로 제어 아키텍처를 일원화하여 실시간 리사이징이 충돌 없이 온전하게 수행되도록 최종 해결했습니다.
+
+### 5. [사전 학습/요율 동기화] cost_model.yaml 기반 시뮬레이터 요율 정합화 및 Q-Table 재학습
+* **해결 및 패치 내용:**
+  - 오프라인 사전 학습기(`head/q_learning/pretrain.py`) 내부에 하드코딩되어 불일치했던 가상 비용 변수들을 실제 `cost_model.yaml` 요율인 On-Demand $0.710, Spot-A $0.220, Spot-B $0.120 수준과 정확히 1:1 일치시켰습니다.
+  - 동기화된 요율 구조 하에서 25,000 에피소드 학습 시뮬레이터를 실행하여 가상 예산 고갈 조건 및 벌점 보상이 수렴된 신규 `q_table.json` 모델 파일을 생성 완료했습니다.
+
+### 6. [헬스체크/안정성] DEAD 워커 감시 하트비트 오차 임계치 상향 (3.0초 -> 5.0초)
+* **해결 및 패치 내용:**
+  - Windows 호스트 환경(WSL2 기반 Docker Desktop) 하에서 다중 PyTorch 컨테이너 스케일아웃 가동 시, 컨테이너 부팅 과정의 순간적인 CPU 스파이크 및 네트워크 병목으로 인해 실제 생존 중인 워커의 하트비트 응답이 3초 이상 transient 지연되는 현상을 확인했습니다.
+  - 이로 인해 워커 노드가 거짓-오프라인(False-Dead) 처리되어 탈퇴와 스케일아웃 재기동이 무한 반복(Flapping)되는 현상을 방지하기 위해, `core.py` 내의 DEAD 노드 판정 오프라인 타임아웃 임계치를 기존 3.0초에서 **5.0초**로 소폭 확장하여 클러스터 안정성을 크게 확보했습니다.
+
+---
+
 ## 📅 2026-07-04 패치 내역
 
 ### 1. [GCS 영속화/장애복구] GCS 상태 영속 체크포인팅 도입
@@ -25,6 +64,50 @@
 ### 4. [오토스케일링/연동] 장애 복구 시 대체 자원 자동 증설 (Auto Scale-Out) 연동
 * **해결 및 패치 내용:**
   - 스팟 워커 탈퇴로 인해 장애 복구(Cascaded Recovery)가 발동하여 유실된 서브태스크가 대기열로 복구되는 시점에, 즉시 대체 노드를 공급하여 클러스터 처리량을 보전하기 위한 자동 스케일아웃(`scale_out_worker("spot_a")`)을 자동 연동했습니다.
+
+### 5. [긴급 버그 패치/오토스케일링] docker-compose 내 Spot-B (worker-3) 정적 기동 복구 및 MPS 연동
+* **해결 및 패치 내용:**
+  - 사용자 환경의 기본 번들 테스트 시나리오 실증을 위해 `docker-compose.yml` 내의 Spot-B (`worker-3`) 정적 컨테이너 구동 블록을 주석 해제하여 복구했습니다.
+  - 동시에 실전형 물리 GPU 자원 격리 환경 구성을 위해 `worker-3` 및 `worker-1`에 `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` 환경 변수를 주입했습니다.
+
+### 6. [Host RAM 최적화] 최대 동적 워커 스케일 상한선 축소 (`MAX_SPOT_SCALE = 3`)
+* **해결 및 패치 내용:**
+  - 16GB RAM 로컬 PC 개발 환경에서 다중 PyTorch 컨테이너(최대 9대)가 동시 실행될 시 발생하는 극심한 Host RAM 부족 및 프리징 문제를 해결하기 위해, 동적 스팟 워커 상한선(`MAX_SPOT_SCALE`)을 기존 7대에서 **3대**로 조절했습니다.
+  - 이로써 PyTorch 임포트 자체로 인한 Host RAM 기본 소모량을 기존 약 6.3GB대에서 **2.1GB대**로 대폭 경감하여 PC의 안정성을 확보했습니다.
+
+### 7. [물리 자원 격리/MPS] NVIDIA MPS 기반 실전형 GPU 하드웨어 격리 도입 및 지연 모사 제거
+* **해결 및 패치 내용:**
+  - 소프트웨어 단위로 `time.sleep`을 주입하여 가상 속도를 모사하던 인위적인 딜레이 코드를 완전히 걷어냈습니다.
+  - 대신 호스트에서 구동 중인 **NVIDIA MPS(Multi-Process Service)**의 물리적인 CUDA 스레드 제한 기능(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`)을 활용하도록 컨테이너 및 스케일아웃 기동 로직에 환경 변수(`spot_a`: 60, `spot_b`: 30)를 연동했습니다.
+  - 이제 가상의 대기 시간이 아니라 물리적으로 할당된 CUDA 코어 스레드 수에 비례하여 에포크 연산 시간이 자연스럽게 증감하게 됩니다.
+
+### 8. [Host RAM 최적화] GPU Direct 합성 데이터셋 생성 및 캐싱 구현
+* **해결 및 패치 내용:**
+  - 매 에포크마다 CPU 상에서 가상 MNIST 및 시계열 데이터셋 텐서를 반복 생성하여 GPU로 전송(`images.to(device)`)하던 로직이 Host RAM에 무거운 가비지를 적체시키는 원인을 분석했습니다.
+  - `get_inline_mnist_dataset(device)` 및 `RNNTask.train_epoch()`에서 CPU를 거치지 않고 **GPU(CUDA) 상에서 합성 텐서를 직접 생성**하도록 리팩토링하고, `CNNTask` 내부에 한 번 로드된 데이터셋을 **캐싱**하도록 개선하여 Host RAM 소모량을 거의 0에 가깝게 최적화했습니다.
+
+### 9. [대시보드/시각화] 실시간 과금 분석 및 스케일 변동 타임라인과 장애/FedAvg 펄스 애니메이션 도입
+* **해결 및 패치 내용:**
+  - **가상 자산 & 과금 분석 카드**: 잔여 예산과 함께 실시간 누적 소비 비용, 예산 소모율 진행 바(Progress Bar), 현재 기동 중인 워커 가격표를 반영한 실시간 시간당 소모 비용율(`$/hr` Burn Rate)을 도입했습니다.
+  - **실시간 자원 변동 및 회수 이력 카드**: 텍스트 로그를 실시간 스캔하여 스케일아웃, 스케일인, 강제 preemption(Eviction) 이벤트를 감지 및 타임라인 배지로 렌더링하도록 구현했습니다.
+  - **장애/선점 회수 노드 적색 퇴출 애니메이션 (`exit-failed`)**: 워커가 사라지는 시점에 마지막 하트비트가 지연되었거나 유휴가 아닌 연산 중 갑자기 사라졌다면 장애/선점 회수로 판정하여 카드가 붉은 경고광을 내며 퇴출되는 효과를 추가했습니다.
+  - **FedAvg 동작 펄스 애니메이션**: 분할 학습 단계 시 보라색 펄스(`MAP`), 병합 단계 시 청록색 박동 펄스(`MERGE`)를 노드에 입혀 분산 알고리즘 제어 동작의 흐름을 한눈에 식별할 수 있도록 개선했습니다.
+
+### 10. [자가데드락/안정화] 글로벌 GCS 락 재진입 가능 RLock 도입 및 타이밍 불일치 수정
+* **해결 및 패치 내용:**
+  - **자가 교착상태(Self-Deadlock) 예방:** 모의 태스크 생성 또는 DEAD 노드 회수 시 `queue_lock`이나 `registry_lock`을 획득한 상태에서 내포된 `save_gcs_state()`가 락을 재요청하며 발생하던 자가 데드락 문제를 전역 락의 재진입 가능 뮤텍스(`threading.RLock`) 교체 및 호출부 격리(with 블록 분리)를 통해 해결했습니다.
+  - **상시 비용 차감 루프 활성화:** 핵심 스케줄러 루프(`head/scheduler/core.py`) 내에 실시간 비용 차감 루틴을 정상 이식하여 워커 노드 구동 시 대시보드 예산 소비가 실시간으로 반영되도록 개선했습니다.
+  - **하트비트 타이밍 매칭 최적화:** DEAD 워커 판정 임계치가 3.0초인 상황에서 하트비트 전송 주기(`DEFAULT_HEARTBEAT_INTERVAL`)가 5.0초로 설정되어 노드가 항상 거짓-오프라인(False-Dead) 판정을 받던 주기를 **1.0초**로 단축 및 동기화했습니다.
+  - **대시보드 렌더러 예외 처리 강화:** 브라우저 캐싱으로 인한 프론트엔드 HTML/CSS/JS 버전 불일치 TypeError 크래시를 전면 방지하기 위해 `app.js` 내에 완전한 DOM Null-Safety 방어 코드를 구현하고 HTTP 서버 단에 `Cache-Control` 캐시 무효화 헤더를 삽입했습니다.
+
+### 11. [스펙 차별화/연동] Spot-A와 Spot-B 스펙의 이종 트레이드오프화 및 Docker/MPS 동적 연동
+* **해결 및 패치 내용:**
+  - **이종 트레이드오프 설계:** Spot-B가 Spot-A의 단순 하위 호환이던 문제를 해결하기 위해, **Spot-A (성능 지향 / 고휘발성)**와 **Spot-B (안정/비용 지향 / 저휘발성)**의 뚜렷한 아키텍처 특성 차이를 정의했습니다:
+    * **Spot-A**: CPU 1.5 Cores, Memory 1.5GB, GPU MPS 85%, Preemption 확률 50% ($0.220/Hour)
+    * **Spot-B**: CPU 0.8 Cores, Memory 768MB, GPU MPS 35%, Preemption 확률 10% ($0.120/Hour)
+  - **Docker SDK cGroup & MPS 동적 로드:** `cluster_manager.py` 내의 하드코딩된 동적 워커 생성 제한 설정을 걷어내고, `cost_model.yaml` 명세에 기반하여 `nano_cpus` 및 `mem_limit`, 그리고 NVIDIA MPS 스레드 제한(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`)을 컨테이너 생성 시 동적 주입하도록 패치했습니다.
+  - **스팟 회수율(Preemption) 연동:** 백그라운드 `eviction_loop`에서 각 스팟 워커 타입의 고유 `preemption_probability`를 `cost_model.yaml`로부터 로드하여 난수 평가에 동적 매핑하도록 구현하여, Spot A는 요금제 변동기(P_spot=1)에 매우 자주 회수되는 반면 Spot B는 안정적으로 생존하는 아키텍처 차이를 완성했습니다.
+  - **정적 워커 및 대시보드 요율 동적화:** `docker-compose.yml` 내의 정적 Spot B 워커(`worker-3`) 명세를 CPU 0.8 / RAM 768M / MPS 35%로 일원화하고, 대시보드 프론트엔드(`app.js`)에서도 하드코딩된 시간당 비용 테이블을 제거해 GCS의 `nodes_config` 데이터에 의거한 동적 Burn Rate 계산을 구현했습니다.
 
 ---
 

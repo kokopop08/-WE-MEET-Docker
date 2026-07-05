@@ -51,10 +51,10 @@ def run_offline_pretraining(episodes=25000):
         # 3. 가상 환경의 1-Step 물리 전이 및 보상 계산
         reward = 0.0
         
-        # 기본 요금 설정
-        cost_od = 1.0
-        cost_spot_a = 0.4
-        cost_spot_b = 0.2
+        # 기본 요금 설정 (cost_model.yaml 기준)
+        cost_od = 0.710
+        cost_spot_a = 0.220
+        cost_spot_b = 0.120
         
         # 3-1. 예산 가용성 팩터(b_avail)에 따른 보상 제약
         if b_avail == 0:  # 예산 위기 상황

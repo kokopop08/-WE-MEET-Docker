@@ -246,34 +246,204 @@ body {
 /* --- Top Grid Row 1 --- */
 .dashboard-grid {
     display: grid;
-    grid-template-columns: 1fr 2.2fr;
+    grid-template-columns: 1.25fr 1fr 1.25fr;
     gap: 1.5rem;
     margin-bottom: 1.5rem;
 }
 
-.budget-card {
-    background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(59, 130, 246, 0.04) 100%);
-    border: 1px solid rgba(139, 92, 246, 0.22);
+.billing-card {
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(59, 130, 246, 0.03) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.18);
     box-shadow: 0 8px 32px 0 rgba(139, 92, 246, 0.05);
 }
 
-.budget-value {
+.billing-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.billing-main-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.billing-item-main {
+    display: flex;
+    flex-direction: column;
+}
+
+.billing-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.2rem;
+}
+
+.budget-value-small {
     font-family: var(--font-outfit);
-    font-size: 3.4rem;
-    font-weight: 900;
+    font-size: 1.85rem;
+    font-weight: 800;
     color: #ffffff;
-    text-shadow: 0 0 30px rgba(139, 92, 246, 0.35);
-    letter-spacing: -0.02em;
-    margin-top: 0.5rem;
     display: flex;
     align-items: baseline;
 }
 
-.budget-value .currency {
-    font-size: 1.4rem;
-    color: var(--text-secondary);
+.spent-value {
+    color: var(--accent-red) !important;
+}
+
+.budget-value-small .currency {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-left: 0.2rem;
     font-weight: 600;
-    margin-left: 0.4rem;
+}
+
+.budget-progress-container {
+    height: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 9999px;
+    overflow: hidden;
+    margin: 0.15rem 0;
+}
+
+.budget-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent-purple), var(--accent-red));
+    box-shadow: 0 0 8px rgba(244, 63, 94, 0.2);
+    transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.billing-sub-row {
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    padding-top: 0.75rem;
+}
+
+.billing-sub-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.billing-sub-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 0.15rem;
+}
+
+.billing-sub-value {
+    font-family: var(--font-outfit);
+    font-size: 1.15rem;
+    color: #60a5fa;
+    font-weight: 700;
+}
+
+/* Timeline Card */
+.timeline-card {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.04) 0%, rgba(139, 92, 246, 0.02) 100%);
+    border: 1px solid var(--border-glass);
+}
+
+.timeline-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    max-height: 105px;
+    overflow-y: auto;
+    padding-right: 0.25rem;
+}
+
+.empty-timeline-placeholder {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 1.25rem;
+}
+
+.timeline-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.02);
+    font-size: 0.75rem;
+}
+
+.timeline-item:last-child {
+    border-bottom: none;
+}
+
+.timeline-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+}
+
+.badge-scale-out {
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    color: var(--accent-green);
+}
+
+.badge-scale-in {
+    background: rgba(139, 92, 246, 0.1);
+    border: 1px solid rgba(139, 92, 246, 0.2);
+    color: var(--accent-purple);
+}
+
+.badge-preempt {
+    background: rgba(244, 63, 94, 0.1);
+    border: 1px solid rgba(244, 63, 94, 0.2);
+    color: var(--accent-red);
+}
+
+.timeline-time {
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    flex-shrink: 0;
+}
+
+.timeline-desc {
+    color: var(--text-main);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Fail/Preemption Exit Animation */
+.worker-card.scale-down-exit-active.exit-failed {
+    border-color: var(--accent-red) !important;
+    box-shadow: 0 0 25px rgba(244, 63, 94, 0.4) !important;
+    background: rgba(244, 63, 94, 0.18) !important;
+    transform: scale(0.85);
+    opacity: 0;
+}
+
+/* FedAvg Map-Merge Pulse Animations */
+.worker-card-mapping {
+    border-color: var(--accent-purple) !important;
+    box-shadow: 0 0 15px var(--accent-purple-glow) !important;
+    background: rgba(139, 92, 246, 0.08) !important;
+}
+
+.worker-card-merging {
+    border-color: var(--accent-blue) !important;
+    box-shadow: 0 0 20px var(--accent-blue-glow) !important;
+    background: rgba(59, 130, 246, 0.12) !important;
+    animation: pulse-merge-card 2s infinite alternate;
+}
+
+@keyframes pulse-merge-card {
+    0% { box-shadow: 0 0 10px rgba(59, 130, 246, 0.2); }
+    100% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.45); border-color: var(--accent-green); }
 }
 
 /* Resource row styling */

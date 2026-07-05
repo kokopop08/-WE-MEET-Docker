@@ -32,7 +32,7 @@ from common.config import DEFAULT_HEAD_PORT
 # 모듈화된 구성요소 임포트
 import head.state as state # 전역 상태 관리
 import head.cluster_manager as cluster_manager # docker/cGroup 관련 함수 모음
-import head.scheduler.core as scheduler# Q-Learning 기반 스케줄러
+import head.scheduler.scheduler_daemon as scheduler# Q-Learning 기반 스케줄러
 import head.dashboard.server as dashboard # 대시보드 HTTP 서버
 
 class BabyRayHeadServicer(babyray_pb2_grpc.BabyRayServiceServicer):
@@ -179,22 +179,25 @@ def get_dashboard_data():
     total_failed = sum(1 for status in state.task_status.values() if status == "FAILED")
 
     # Q-Learning Agent의 훈련 파라미터 획득
-    from head.scheduler.utils import agent
+    from head.scheduler.task_executor import agent
     q_epsilon = getattr(agent, "epsilon", 0.0)
+    # q_epsilon = agent.epsilon (객체의 필드값에 접근)
+    # get.attr(객체, 속성명)
 
     # 대시보드 웹 API가 JSON 포맷 등으로 파싱하기 편하도록 최종 마스터 데이터 구조 구축
     return {
         "virtual_budget": state.virtual_budget,
-        "scheduler_mode": state.SCHEDULER_MODE,
-        "workers": workers,
-        "queue": queue,
-        "total_completed": total_completed,
-        "total_failed": total_failed,
-        "q_epsilon": q_epsilon,
-        "host_cpu": psutil.cpu_percent(),
-        "host_mem": psutil.virtual_memory().percent,
-        "gpu_free_vram": cluster_manager.get_gpu_free_memory(),
-        "conclusions": state.latest_conclusions
+        "scheduler_mode": state.SCHEDULER_MODE, # 어떤 스케줄러인지 (static, dynamic, q_learning)
+        "workers": workers, # 현재 워커 정보
+        "queue": queue, # 현재 대기열 정보
+        "total_completed": total_completed, # 완료된 태스크 수
+        "total_failed": total_failed, # 실패한 태스크 수
+        "q_epsilon": q_epsilon, # 딥러닝 모델에서 랜덤성을 제어하는 변수
+        "host_cpu": psutil.cpu_percent(), # CPU 사용률
+        "host_mem": psutil.virtual_memory().percent, # 메모리 사용률
+        "gpu_free_vram": cluster_manager.get_gpu_free_memory(), # GPU 용량 구하는 함수 호출
+        "conclusions": state.latest_conclusions, # 분산학습 추론 결론
+        "nodes_config": getattr(agent, "nodes_config", {}) # 노드 설정
     }
 
 
@@ -231,7 +234,13 @@ def serve():
     scheduler_thread = threading.Thread(target=scheduler.scheduler_loop, daemon=True)
     scheduler_thread.start()
     
+    is_shutting_down = False
+
     def handle_shutdown(signum, frame):
+        nonlocal is_shutting_down
+        if is_shutting_down:
+            return
+        is_shutting_down = True
         print(f"\n[Head] 종료 시그널 수신 (Signal: {signum}). Graceful Shutdown 시작...")
         try:
             server.stop(0)
