@@ -1,1079 +1,794 @@
 {
   "task_queue": [
     {
-      "task_id": "task-0052-map-1",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "deadline": 1783396975.698686,
-      "enqueue_time": 1783396955.698687,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0052-map-1",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "deadline": 1783397001.315963,
-      "enqueue_time": 1783396981.315964,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0055-map-0",
-      "model_type": "RNN",
-      "epochs": 5,
-      "deadline": 1783397001.3170555,
-      "enqueue_time": 1783396981.3170562,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0052-map-0",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "deadline": 1783397121.1203258,
-      "enqueue_time": 1783397101.120327,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0055-map-1",
-      "model_type": "RNN",
-      "epochs": 6,
-      "deadline": 1783397123.0203474,
-      "enqueue_time": 1783397103.0203488,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0055",
-      "model_type": "RNN",
-      "epochs": 13,
-      "deadline": 1783396970.0774596,
-      "enqueue_time": 1783396958.0774603
-    },
-    {
-      "task_id": "task-0065-map-0",
-      "model_type": "LSTM",
-      "epochs": 8,
-      "deadline": 1783397131.7509036,
-      "enqueue_time": 1783397111.7509046,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0065-map-2",
-      "model_type": "LSTM",
-      "epochs": 6,
-      "deadline": 1783397131.7520564,
-      "enqueue_time": 1783397111.7520568,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0065",
-      "model_type": "LSTM",
-      "epochs": 20,
-      "deadline": 1783397002.5365336,
-      "enqueue_time": 1783396993.536534
-    },
-    {
-      "task_id": "task-0066-map-2",
-      "model_type": "RNN",
-      "epochs": 6,
-      "deadline": 1783397142.2717562,
-      "enqueue_time": 1783397122.271757,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0067-map-0",
-      "model_type": "CNN",
-      "epochs": 6,
-      "deadline": 1783397153.801904,
-      "enqueue_time": 1783397133.801905,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0068-map-0",
-      "model_type": "CNN",
-      "epochs": 8,
-      "deadline": 1783397153.8035245,
-      "enqueue_time": 1783397133.8035269,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0071",
-      "model_type": "CNN",
-      "epochs": 12,
-      "deadline": 1783397141.2537246,
-      "enqueue_time": 1783397136.2537253
-    },
-    {
-      "task_id": "task-0068",
-      "model_type": "CNN",
-      "epochs": 20,
-      "deadline": 1783397001.5365586,
-      "enqueue_time": 1783396993.5365589
-    },
-    {
-      "task_id": "task-0070-map-0",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "deadline": 1783397165.178515,
-      "enqueue_time": 1783397145.178516,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0070",
-      "model_type": "LSTM",
-      "epochs": 15,
-      "deadline": 1783397004.536587,
-      "enqueue_time": 1783396993.5365875
-    },
-    {
-      "task_id": "task-0069",
-      "model_type": "LSTM",
-      "epochs": 15,
-      "deadline": 1783397001.5365663,
-      "enqueue_time": 1783396993.5365665
-    },
-    {
-      "task_id": "task-0057",
-      "model_type": "RNN",
-      "epochs": 18,
-      "deadline": 1783396969.8653932,
-      "enqueue_time": 1783396964.8653934
-    },
-    {
-      "task_id": "task-0059-map-0",
-      "model_type": "CNN",
-      "epochs": 7,
-      "deadline": 1783397021.3361208,
-      "enqueue_time": 1783397001.3361223,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0061-map-0",
-      "model_type": "CNN",
-      "epochs": 7,
-      "deadline": 1783397209.3437386,
-      "enqueue_time": 1783397189.3437395,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    },
-    {
-      "task_id": "task-0061-map-2",
-      "model_type": "CNN",
-      "epochs": 5,
-      "deadline": 1783397219.2174752,
-      "enqueue_time": 1783397199.2174757,
-      "dataset_path": "",
-      "is_recovered_subtask": true
-    }
-  ],
-  "task_status": {
-    "task-0001": "SUCCESS",
-    "task-0003": "SUCCESS",
-    "task-0004": "SUCCESS",
-    "task-0002-map-0": "SUCCESS",
-    "task-0002": "SUCCESS",
-    "task-0006": "SUCCESS",
-    "task-0006-map-1": "SUCCESS",
-    "task-0007": "SUCCESS",
-    "task-0005": "SUCCESS",
-    "task-0008": "SUCCESS",
-    "task-0009": "SUCCESS",
-    "task-0010": "SUCCESS",
-    "task-0011": "SUCCESS",
-    "task-0012": "SUCCESS",
-    "task-0013": "SUCCESS",
-    "task-0014": "SUCCESS",
-    "task-0015": "SUCCESS",
-    "task-0016": "SUCCESS",
-    "task-0017": "SUCCESS",
-    "task-0020": "SUCCESS",
-    "task-0018": "SUCCESS",
-    "task-0019": "SUCCESS",
-    "task-0021": "SUCCESS",
-    "task-0023": "SUCCESS",
-    "task-0022": "SUCCESS",
-    "task-0024": "SUCCESS",
-    "task-0026": "SUCCESS",
-    "task-0021-map-0": "SUCCESS",
-    "task-0025": "SUCCESS",
-    "task-0027": "SUCCESS",
-    "task-0027-map-1": "SUCCESS",
-    "task-0028": "SUCCESS",
-    "task-0030": "SUCCESS",
-    "task-0031": "SUCCESS",
-    "task-0033": "SUCCESS",
-    "task-0032": "SUCCESS",
-    "task-0029": "SUCCESS",
-    "task-0029-map-1": "SUCCESS",
-    "task-0034": "SUCCESS",
-    "task-0035": "SUCCESS",
-    "task-0036": "SUCCESS",
-    "task-0037": "SUCCESS",
-    "task-0038": "SUCCESS",
-    "task-0039": "SUCCESS",
-    "task-0040": "SUCCESS",
-    "task-0042": "SUCCESS",
-    "task-0043": "SUCCESS",
-    "task-0044": "SUCCESS",
-    "task-0045": "SUCCESS",
-    "task-0046": "SUCCESS",
-    "task-0047": "SUCCESS",
-    "task-0044-map-0": "SUCCESS",
-    "task-0041": "SUCCESS",
-    "task-0048-map-0": "SUCCESS",
-    "task-0048": "SUCCESS",
-    "task-0050": "SUCCESS",
-    "task-0051": "SUCCESS",
-    "task-0052": "SUCCESS",
-    "task-0054": "SUCCESS",
-    "task-0049": "SUCCESS",
-    "task-0053": "SUCCESS",
-    "task-0049-map-0": "SUCCESS",
-    "task-0053-map-0": "SUCCESS",
-    "task-0052-map-1": "FAILED",
-    "task-0055": "FAILED",
-    "task-0057": "FAILED",
-    "task-0056": "SUCCESS",
-    "task-0058": "SUCCESS",
-    "task-0059": "SUCCESS",
-    "task-0060": "SUCCESS",
-    "task-0061": "FAILED",
-    "task-0062": "SUCCESS",
-    "task-0052-map-0": "SUCCESS",
-    "task-0055-map-0": "FAILED",
-    "task-0063": "SUCCESS",
-    "task-0064": "SUCCESS",
-    "task-0065": "FAILED",
-    "task-0066": "SUCCESS",
-    "task-0068": "FAILED",
-    "task-0067": "SUCCESS",
-    "task-0070": "FAILED",
-    "task-0069": "FAILED",
-    "task-0056-map-0": "SUCCESS",
-    "task-0059-map-0": "FAILED",
-    "task-0062-map-2": "SUCCESS"
-  },
-  "completed_tasks_cache": {
-    "task-0001": true,
-    "task-0003": true,
-    "task-0004": true,
-    "task-0002-map-0": true,
-    "task-0006-map-1": true,
-    "task-0002": true,
-    "task-0006": true,
-    "task-0007": true,
-    "task-0005": true,
-    "task-0008": true,
-    "task-0009": true,
-    "task-0010": true,
-    "task-0011": true,
-    "task-0012": true,
-    "task-0013": true,
-    "task-0014": true,
-    "task-0015": true,
-    "task-0016": true,
-    "task-0017": true,
-    "task-0020": true,
-    "task-0018": true,
-    "task-0019": true,
-    "task-0023": true,
-    "task-0022": true,
-    "task-0024": true,
-    "task-0026": true,
-    "task-0021": true,
-    "task-0025": true,
-    "task-0027": true,
-    "task-0021-map-0": true,
-    "task-0027-map-1": true,
-    "task-0028": true,
-    "task-0030": true,
-    "task-0031": true,
-    "task-0033": true,
-    "task-0032": true,
-    "task-0029-map-1": true,
-    "task-0029": true,
-    "task-0034": true,
-    "task-0035": true,
-    "task-0036": true,
-    "task-0037": true,
-    "task-0038": true,
-    "task-0039": true,
-    "task-0040": true,
-    "task-0042": true,
-    "task-0043": true,
-    "task-0045": true,
-    "task-0046": true,
-    "task-0047": true,
-    "task-0044-map-0": true,
-    "task-0041": true,
-    "task-0048-map-0": true,
-    "task-0048": true,
-    "task-0044": true,
-    "task-0050": true,
-    "task-0051": true,
-    "task-0049-map-0": true,
-    "task-0049": true,
-    "task-0053-map-0": true,
-    "task-0056": true,
-    "task-0059": true,
-    "task-0060": true,
-    "task-0054": true,
-    "task-0062": true,
-    "task-0053": true,
-    "task-0052-map-0": true,
-    "task-0063": true,
-    "task-0064": true,
-    "task-0052": true,
-    "task-0066": true,
-    "task-0067": true,
-    "task-0056-map-0": true,
-    "task-0058": true,
-    "task-0062-map-2": true
-  },
-  "task_lineage": {
-    "task-0002-map-0": {
-      "parent": "task-0002",
-      "model_type": "CNN",
-      "epochs": 8,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0006-map-0": {
-      "parent": "task-0006",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0006-map-1": {
-      "parent": "task-0006",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0002-map-1": {
-      "parent": "task-0002",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0021-map-0": {
-      "parent": "task-0021",
-      "model_type": "LSTM",
-      "epochs": 8,
-      "worker_id": "worker-3-4",
-      "status": "FAILED",
-      "dataset_path": ""
-    },
-    "task-0029-map-0": {
-      "parent": "task-0029",
-      "model_type": "CNN",
-      "epochs": 8,
-      "worker_id": "worker-1",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0029-map-1": {
-      "parent": "task-0029",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-3-2",
-      "status": "FAILED",
-      "dataset_path": ""
-    },
-    "task-0044-map-0": {
-      "parent": "task-0044",
-      "model_type": "RNN",
-      "epochs": 10,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0044-map-1": {
-      "parent": "task-0044",
-      "model_type": "RNN",
-      "epochs": 10,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0044-map-2": {
-      "parent": "task-0044",
-      "model_type": "RNN",
-      "epochs": 6,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0048-map-0": {
-      "parent": "task-0048",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0048-map-1": {
-      "parent": "task-0048",
-      "model_type": "CNN",
-      "epochs": 6,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0053-map-0": {
-      "parent": "task-0053",
-      "model_type": "LSTM",
-      "epochs": 7,
-      "worker_id": "worker-2-4",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0053-map-1": {
-      "parent": "task-0053",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "worker_id": "worker-2-5",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0053-map-2": {
-      "parent": "task-0053",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "worker_id": "worker-2-4",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0055-map-0": {
-      "parent": "task-0055",
-      "model_type": "RNN",
-      "epochs": 7,
-      "worker_id": "worker-2-1",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0057-map-0": {
-      "parent": "task-0057",
-      "model_type": "RNN",
-      "epochs": 9,
-      "worker_id": "worker-2-6",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0057-map-1": {
-      "parent": "task-0057",
-      "model_type": "RNN",
-      "epochs": 9,
-      "worker_id": "worker-2-5",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0057-map-2": {
-      "parent": "task-0057",
-      "model_type": "RNN",
-      "epochs": 6,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0058-map-0": {
-      "parent": "task-0058",
-      "model_type": "LSTM",
-      "epochs": 9,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0058-map-1": {
-      "parent": "task-0058",
-      "model_type": "LSTM",
-      "epochs": 8,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0061-map-0": {
-      "parent": "task-0061",
-      "model_type": "CNN",
-      "epochs": 7,
-      "worker_id": "worker-1",
-      "status": "FAILED",
-      "dataset_path": ""
-    },
-    "task-0055-map-1": {
-      "parent": "task-0055",
-      "model_type": "RNN",
-      "epochs": 6,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0065-map-0": {
-      "parent": "task-0065",
-      "model_type": "LSTM",
-      "epochs": 8,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0065-map-1": {
-      "parent": "task-0065",
-      "model_type": "LSTM",
-      "epochs": 6,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0065-map-2": {
-      "parent": "task-0065",
-      "model_type": "LSTM",
-      "epochs": 6,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0068-map-0": {
-      "parent": "task-0068",
-      "model_type": "CNN",
-      "epochs": 8,
-      "worker_id": "worker-3-1",
-      "status": "FAILED",
-      "dataset_path": ""
-    },
-    "task-0068-map-1": {
-      "parent": "task-0068",
-      "model_type": "CNN",
-      "epochs": 6,
-      "worker_id": "worker-3-2",
-      "status": "FAILED",
-      "dataset_path": ""
-    },
-    "task-0069-map-0": {
-      "parent": "task-0069",
-      "model_type": "LSTM",
-      "epochs": 8,
-      "worker_id": "worker-2-1",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0069-map-1": {
-      "parent": "task-0069",
-      "model_type": "LSTM",
-      "epochs": 7,
-      "worker_id": "worker-2-1",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0070-map-0": {
-      "parent": "task-0070",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0070-map-1": {
-      "parent": "task-0070",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "worker_id": "worker-2-2",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0070-map-2": {
-      "parent": "task-0070",
-      "model_type": "LSTM",
-      "epochs": 5,
-      "worker_id": "worker-2-3",
-      "status": "SUCCESS",
-      "dataset_path": ""
-    },
-    "task-0061-map-1": {
-      "parent": "task-0061",
-      "model_type": "CNN",
-      "epochs": 5,
-      "worker_id": "worker-3-1",
-      "status": "RUNNING",
-      "dataset_path": ""
-    },
-    "task-0061-map-2": {
-      "parent": "task-0061",
-      "model_type": "CNN",
-      "epochs": 5,
-      "worker_id": "worker-3-4",
-      "status": "RUNNING",
-      "dataset_path": ""
-    }
-  },
-  "virtual_budget": 9.430461111111848,
-  "task_counter": 71,
-  "latest_conclusions": [
-    {
-      "task_id": "task-0001",
-      "model_type": "RNN",
-      "timestamp": 1783396684.1038938,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.204, 0.063, -0.013, -0.067, -0.115]"
-    },
-    {
-      "task_id": "task-0003",
-      "model_type": "LSTM",
-      "timestamp": 1783396688.9517698,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I babyray babyray babyray babyray babyray\""
-    },
-    {
-      "task_id": "task-0004",
-      "model_type": "RNN",
-      "timestamp": 1783396690.8271446,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.528, 0.438, 0.456, 0.479, 0.516]"
-    },
-    {
-      "task_id": "task-0002-map-0",
-      "model_type": "CNN",
-      "timestamp": 1783396694.8368516,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 61.09%)"
-    },
-    {
-      "task_id": "task-0006-map-1",
-      "model_type": "CNN",
-      "timestamp": 1783396705.9850771,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 74.92%)"
-    },
-    {
-      "task_id": "task-0002",
-      "model_type": "CNN",
-      "timestamp": 1783396707.8040063,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.77%)"
-    },
-    {
-      "task_id": "task-0006",
-      "model_type": "CNN",
-      "timestamp": 1783396710.098474,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.80%)"
-    },
-    {
-      "task_id": "task-0007",
-      "model_type": "RNN",
-      "timestamp": 1783396711.7044456,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.482, 0.365, 0.329, 0.305, 0.289]"
-    },
-    {
-      "task_id": "task-0005",
-      "model_type": "CNN",
-      "timestamp": 1783396716.7697504,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 14.62%)"
-    },
-    {
-      "task_id": "task-0008",
-      "model_type": "LSTM",
-      "timestamp": 1783396720.136112,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0009",
-      "model_type": "RNN",
-      "timestamp": 1783396757.5120795,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.270, 0.155, 0.107, 0.054, 0.004]"
-    },
-    {
-      "task_id": "task-0010",
-      "model_type": "RNN",
-      "timestamp": 1783396771.105323,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.259, 0.079, -0.054, -0.217, -0.394]"
-    },
-    {
-      "task_id": "task-0011",
-      "model_type": "LSTM",
-      "timestamp": 1783396811.874034,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I agent babyray babyray babyray babyray\""
-    },
-    {
-      "task_id": "task-0012",
-      "model_type": "CNN",
-      "timestamp": 1783396813.8493595,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 98.33%)"
-    },
-    {
-      "task_id": "task-0013",
-      "model_type": "CNN",
-      "timestamp": 1783396814.6082842,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.98%)"
-    },
-    {
-      "task_id": "task-0014",
-      "model_type": "RNN",
-      "timestamp": 1783396816.0843637,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.231, 0.140, 0.103, 0.088, 0.070]"
-    },
-    {
-      "task_id": "task-0015",
-      "model_type": "LSTM",
-      "timestamp": 1783396816.8648314,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems systems systems\""
-    },
-    {
-      "task_id": "task-0016",
-      "model_type": "RNN",
-      "timestamp": 1783396817.8667843,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.402, 0.305, 0.272, 0.232, 0.177]"
-    },
-    {
-      "task_id": "task-0017",
-      "model_type": "RNN",
-      "timestamp": 1783396818.6511104,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.312, 0.194, 0.164, 0.119, 0.065]"
-    },
-    {
-      "task_id": "task-0020",
-      "model_type": "CNN",
-      "timestamp": 1783396819.6831968,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.73%)"
-    },
-    {
-      "task_id": "task-0018",
-      "model_type": "LSTM",
-      "timestamp": 1783396820.4128852,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems systems systems\""
-    },
-    {
-      "task_id": "task-0019",
-      "model_type": "RNN",
-      "timestamp": 1783396823.2684178,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.719, 0.753, 0.856, 0.916, 0.995]"
-    },
-    {
-      "task_id": "task-0023",
-      "model_type": "CNN",
-      "timestamp": 1783396842.5036764,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.99%)"
-    },
-    {
-      "task_id": "task-0022",
-      "model_type": "LSTM",
-      "timestamp": 1783396842.5326183,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed systems systems systems systems\""
-    },
-    {
-      "task_id": "task-0024",
-      "model_type": "CNN",
-      "timestamp": 1783396842.7572262,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.69%)"
-    },
-    {
-      "task_id": "task-0026",
-      "model_type": "RNN",
-      "timestamp": 1783396844.053768,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.197, 0.039, -0.048, -0.129, -0.206]"
-    },
-    {
-      "task_id": "task-0021",
-      "model_type": "LSTM",
-      "timestamp": 1783396844.6443765,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed distributed distributed distributed agent\""
-    },
-    {
-      "task_id": "task-0025",
-      "model_type": "LSTM",
-      "timestamp": 1783396847.5791566,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with with with\""
-    },
-    {
-      "task_id": "task-0027",
-      "model_type": "CNN",
-      "timestamp": 1783396851.235544,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 44.94%)"
-    },
-    {
-      "task_id": "task-0021-map-0",
-      "model_type": "LSTM",
-      "timestamp": 1783396854.1101959,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0027-map-1",
-      "model_type": "CNN",
-      "timestamp": 1783396854.326695,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 47.90%)"
-    },
-    {
-      "task_id": "task-0028",
-      "model_type": "CNN",
-      "timestamp": 1783396867.0833497,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.94%)"
-    },
-    {
-      "task_id": "task-0030",
-      "model_type": "LSTM",
-      "timestamp": 1783396869.6817417,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems systems systems\""
-    },
-    {
-      "task_id": "task-0031",
-      "model_type": "CNN",
-      "timestamp": 1783396871.5673504,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.89%)"
-    },
-    {
-      "task_id": "task-0033",
-      "model_type": "CNN",
-      "timestamp": 1783396874.3011227,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.99%)"
-    },
-    {
-      "task_id": "task-0032",
-      "model_type": "LSTM",
-      "timestamp": 1783396874.800334,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed distributed with with with\""
-    },
-    {
-      "task_id": "task-0029-map-1",
-      "model_type": "CNN",
-      "timestamp": 1783396879.7339513,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 53.73%)"
-    },
-    {
-      "task_id": "task-0029",
-      "model_type": "CNN",
-      "timestamp": 1783396883.5139318,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.96%)"
-    },
-    {
-      "task_id": "task-0034",
-      "model_type": "LSTM",
-      "timestamp": 1783396892.08983,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed agent with with agent\""
-    },
-    {
-      "task_id": "task-0035",
-      "model_type": "RNN",
-      "timestamp": 1783396894.5862422,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.268, 0.164, 0.107, 0.080, 0.050]"
-    },
-    {
-      "task_id": "task-0036",
-      "model_type": "CNN",
-      "timestamp": 1783396896.171711,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.98%)"
-    },
-    {
       "task_id": "task-0037",
-      "model_type": "RNN",
-      "timestamp": 1783396897.8300247,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.184, 0.079, 0.023, -0.028, -0.074]"
+      "model_type": "CNN",
+      "epochs": 19,
+      "deadline": 1783398172.2704828,
+      "enqueue_time": 1783398161.2704828
     },
     {
       "task_id": "task-0038",
-      "model_type": "LSTM",
-      "timestamp": 1783396898.56619,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I babyray babyray babyray babyray babyray\""
+      "model_type": "RNN",
+      "epochs": 19,
+      "deadline": 1783398172.2705057,
+      "enqueue_time": 1783398161.270506
     },
     {
       "task_id": "task-0039",
-      "model_type": "RNN",
-      "timestamp": 1783396899.4658594,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.280, 0.098, -0.018, -0.125, -0.232]"
+      "model_type": "LSTM",
+      "epochs": 14,
+      "deadline": 1783398169.2705271,
+      "enqueue_time": 1783398161.2705276
+    },
+    {
+      "task_id": "task-0032-map-1",
+      "model_type": "CNN",
+      "epochs": 6,
+      "deadline": 1783398190.2842722,
+      "enqueue_time": 1783398170.284273,
+      "dataset_path": "",
+      "is_recovered_subtask": true
     },
     {
       "task_id": "task-0040",
-      "model_type": "RNN",
-      "timestamp": 1783396900.2303472,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.418, 0.217, 0.087, -0.048, -0.209]"
+      "model_type": "CNN",
+      "epochs": 13,
+      "deadline": 1783398187.6070085,
+      "enqueue_time": 1783398175.607009
+    },
+    {
+      "task_id": "task-0041",
+      "model_type": "LSTM",
+      "epochs": 13,
+      "deadline": 1783398183.6070309,
+      "enqueue_time": 1783398175.6070313
     },
     {
       "task_id": "task-0042",
-      "model_type": "CNN",
-      "timestamp": 1783396901.2062004,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.82%)"
+      "model_type": "RNN",
+      "epochs": 13,
+      "deadline": 1783398181.6070552,
+      "enqueue_time": 1783398175.6070554
     },
     {
       "task_id": "task-0043",
       "model_type": "LSTM",
-      "timestamp": 1783396904.0661762,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed distributed distributed distributed distributed\""
-    },
-    {
-      "task_id": "task-0045",
-      "model_type": "LSTM",
-      "timestamp": 1783396915.2151198,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I love agent agent agent autoscale\""
-    },
-    {
-      "task_id": "task-0046",
-      "model_type": "LSTM",
-      "timestamp": 1783396917.5569258,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed distributed autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0047",
-      "model_type": "CNN",
-      "timestamp": 1783396917.8244398,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.99%)"
-    },
-    {
-      "task_id": "task-0044-map-0",
-      "model_type": "RNN",
-      "timestamp": 1783396919.478726,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.520, 0.512, 0.512, 0.513, 0.527]"
-    },
-    {
-      "task_id": "task-0041",
-      "model_type": "CNN",
-      "timestamp": 1783396929.1604753,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.91%)"
-    },
-    {
-      "task_id": "task-0048-map-0",
-      "model_type": "CNN",
-      "timestamp": 1783396931.0548677,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 45.36%)"
-    },
-    {
-      "task_id": "task-0048",
-      "model_type": "CNN",
-      "timestamp": 1783396940.2203074,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.95%)"
+      "epochs": 20,
+      "deadline": 1783398180.607083,
+      "enqueue_time": 1783398175.6070833
     },
     {
       "task_id": "task-0044",
       "model_type": "RNN",
-      "timestamp": 1783396941.8271072,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.324, 0.176, 0.065, -0.033, -0.144]"
+      "epochs": 18,
+      "deadline": 1783398182.6070971,
+      "enqueue_time": 1783398175.6070974
     },
     {
-      "task_id": "task-0050",
-      "model_type": "LSTM",
-      "timestamp": 1783396945.5165823,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems autoscale autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0051",
+      "task_id": "task-0045",
       "model_type": "RNN",
-      "timestamp": 1783396945.7909544,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.324, 0.208, 0.171, 0.146, 0.111]"
+      "epochs": 19,
+      "deadline": 1783398186.6071088,
+      "enqueue_time": 1783398175.6071093
     },
     {
-      "task_id": "task-0049-map-0",
+      "task_id": "task-0046",
       "model_type": "CNN",
-      "timestamp": 1783396962.9757915,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 68.49%)"
+      "epochs": 15,
+      "deadline": 1783398186.6071203,
+      "enqueue_time": 1783398175.607121
+    },
+    {
+      "task_id": "task-0047",
+      "model_type": "CNN",
+      "epochs": 12,
+      "deadline": 1783398181.6071322,
+      "enqueue_time": 1783398175.6071327
+    },
+    {
+      "task_id": "task-0033-map-2",
+      "model_type": "RNN",
+      "epochs": 6,
+      "deadline": 1783398205.1601188,
+      "enqueue_time": 1783398185.1601198,
+      "dataset_path": "",
+      "is_recovered_subtask": true
+    },
+    {
+      "task_id": "task-0033",
+      "model_type": "RNN",
+      "epochs": 19,
+      "deadline": 1783398167.270446,
+      "enqueue_time": 1783398161.2704465
+    },
+    {
+      "task_id": "task-0048",
+      "model_type": "RNN",
+      "epochs": 12,
+      "deadline": 1783398250.9637704,
+      "enqueue_time": 1783398241.963771
     },
     {
       "task_id": "task-0049",
-      "model_type": "CNN",
-      "timestamp": 1783396968.0431063,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 36.74%)"
-    },
-    {
-      "task_id": "task-0053-map-0",
       "model_type": "LSTM",
-      "timestamp": 1783396995.0941906,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I love love love love love\""
+      "epochs": 17,
+      "deadline": 1783398246.9637992,
+      "enqueue_time": 1783398241.9637997
     },
     {
-      "task_id": "task-0056",
-      "model_type": "CNN",
-      "timestamp": 1783397001.6587477,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 33.37%)"
-    },
-    {
-      "task_id": "task-0059",
-      "model_type": "CNN",
-      "timestamp": 1783397007.3276358,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 50.12%)"
-    },
-    {
-      "task_id": "task-0060",
-      "model_type": "LSTM",
-      "timestamp": 1783397028.1369228,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems systems systems\""
-    },
-    {
-      "task_id": "task-0054",
+      "task_id": "task-0050",
       "model_type": "RNN",
-      "timestamp": 1783397033.1255543,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [-0.017, -0.035, -0.045, -0.048, -0.050]"
+      "epochs": 14,
+      "deadline": 1783398253.9638135,
+      "enqueue_time": 1783398241.9638143
     },
     {
-      "task_id": "task-0062",
-      "model_type": "RNN",
-      "timestamp": 1783397035.527526,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.019, 0.014, 0.016, 0.017, 0.017]"
-    },
-    {
-      "task_id": "task-0053",
-      "model_type": "LSTM",
-      "timestamp": 1783397048.3782084,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed autoscale autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0052-map-0",
-      "model_type": "LSTM",
-      "timestamp": 1783397052.3357692,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I agent agent agent agent agent\""
-    },
-    {
-      "task_id": "task-0063",
-      "model_type": "LSTM",
-      "timestamp": 1783397100.417634,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
-    },
-    {
-      "task_id": "task-0064",
-      "model_type": "RNN",
-      "timestamp": 1783397103.49965,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.480, 0.370, 0.328, 0.285, 0.235]"
+      "task_id": "task-0051",
+      "model_type": "CNN",
+      "epochs": 16,
+      "deadline": 1783398250.9638531,
+      "enqueue_time": 1783398241.9638536
     },
     {
       "task_id": "task-0052",
       "model_type": "LSTM",
-      "timestamp": 1783397106.7076452,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+      "epochs": 12,
+      "deadline": 1783398251.963868,
+      "enqueue_time": 1783398241.9638681
     },
     {
-      "task_id": "task-0066",
+      "task_id": "task-0053",
+      "model_type": "CNN",
+      "epochs": 14,
+      "deadline": 1783398246.963893,
+      "enqueue_time": 1783398241.9638934
+    },
+    {
+      "task_id": "task-0054",
       "model_type": "RNN",
-      "timestamp": 1783397126.2336638,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.117, 0.095, 0.082, 0.072, 0.066]"
+      "epochs": 16,
+      "deadline": 1783398314.405674,
+      "enqueue_time": 1783398309.4056745
     },
     {
-      "task_id": "task-0067",
-      "model_type": "CNN",
-      "timestamp": 1783397144.6878545,
-      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 36.44%)"
+      "task_id": "task-0055",
+      "model_type": "LSTM",
+      "epochs": 12,
+      "deadline": 1783398319.4057024,
+      "enqueue_time": 1783398309.4057028
     },
     {
-      "task_id": "task-0056-map-0",
-      "model_type": "CNN",
-      "timestamp": 1783397162.485812,
-      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 91.17%)"
+      "task_id": "task-0056",
+      "model_type": "RNN",
+      "epochs": 16,
+      "deadline": 1783398314.4057164,
+      "enqueue_time": 1783398309.4057167
+    },
+    {
+      "task_id": "task-0057",
+      "model_type": "RNN",
+      "epochs": 17,
+      "deadline": 1783398315.4057317,
+      "enqueue_time": 1783398309.405732
     },
     {
       "task_id": "task-0058",
       "model_type": "LSTM",
-      "timestamp": 1783397183.3878505,
-      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed distributed distributed agent agent\""
+      "epochs": 18,
+      "deadline": 1783398317.4057589,
+      "enqueue_time": 1783398309.4057596
     },
     {
-      "task_id": "task-0062-map-2",
+      "task_id": "task-0059",
       "model_type": "RNN",
-      "timestamp": 1783397189.850405,
-      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.709, 0.725, 0.794, 0.863, 0.972]"
+      "epochs": 15,
+      "deadline": 1783398317.4057717,
+      "enqueue_time": 1783398309.405772
+    },
+    {
+      "task_id": "task-0060",
+      "model_type": "LSTM",
+      "epochs": 15,
+      "deadline": 1783398316.4057822,
+      "enqueue_time": 1783398309.4057825
+    },
+    {
+      "task_id": "task-0061",
+      "model_type": "LSTM",
+      "epochs": 12,
+      "deadline": 1783398314.405793,
+      "enqueue_time": 1783398309.4057934
+    },
+    {
+      "task_id": "task-0036-map-1",
+      "model_type": "RNN",
+      "epochs": 6,
+      "deadline": 1783398348.9186187,
+      "enqueue_time": 1783398328.9186194,
+      "dataset_path": "",
+      "is_recovered_subtask": true
+    },
+    {
+      "task_id": "task-0036",
+      "model_type": "RNN",
+      "epochs": 19,
+      "deadline": 1783398169.270473,
+      "enqueue_time": 1783398161.2704735
+    }
+  ],
+  "task_status": {
+    "task-0001": "SUCCESS",
+    "task-0002": "SUCCESS",
+    "task-0003": "SUCCESS",
+    "task-0004": "SUCCESS",
+    "task-0006": "SUCCESS",
+    "task-0007": "SUCCESS",
+    "task-0005": "SUCCESS",
+    "task-0008": "SUCCESS",
+    "task-0010": "SUCCESS",
+    "task-0009": "SUCCESS",
+    "task-0012": "SUCCESS",
+    "task-0013": "SUCCESS",
+    "task-0015": "SUCCESS",
+    "task-0011": "SUCCESS",
+    "task-0014": "SUCCESS",
+    "task-0007-map-0": "SUCCESS",
+    "task-0007-map-2": "SUCCESS",
+    "task-0016": "SUCCESS",
+    "task-0017": "SUCCESS",
+    "task-0020": "SUCCESS",
+    "task-0022": "SUCCESS",
+    "task-0021": "SUCCESS",
+    "task-0018": "SUCCESS",
+    "task-0019": "SUCCESS",
+    "task-0011-map-2": "SUCCESS",
+    "task-0007-map-1": "SUCCESS",
+    "task-0023": "SUCCESS",
+    "task-0018-map-0": "SUCCESS",
+    "task-0005-map-0": "SUCCESS",
+    "task-0024": "SUCCESS",
+    "task-0011-map-1": "SUCCESS",
+    "task-0011-map-0": "SUCCESS",
+    "task-0022-map-0": "SUCCESS",
+    "task-0018-map-1": "SUCCESS",
+    "task-0005-map-2": "SUCCESS",
+    "task-0019-map-0": "SUCCESS",
+    "task-0019-map-1": "SUCCESS",
+    "task-0025": "SUCCESS",
+    "task-0026": "SUCCESS",
+    "task-0028": "SUCCESS",
+    "task-0027": "SUCCESS",
+    "task-0029": "SUCCESS",
+    "task-0025-map-0": "SUCCESS",
+    "task-0026-map-1": "SUCCESS",
+    "task-0030": "SUCCESS",
+    "task-0030-map-2": "SUCCESS",
+    "task-0031": "SUCCESS",
+    "task-0032": "SUCCESS",
+    "task-0033": "FAILED",
+    "task-0034": "SUCCESS",
+    "task-0035": "SUCCESS",
+    "task-0036": "FAILED"
+  },
+  "completed_tasks_cache": {
+    "task-0001": true,
+    "task-0002": true,
+    "task-0003": true,
+    "task-0004": true,
+    "task-0006": true,
+    "task-0008": true,
+    "task-0010": true,
+    "task-0009": true,
+    "task-0013": true,
+    "task-0015": true,
+    "task-0007-map-0": true,
+    "task-0007-map-2": true,
+    "task-0016": true,
+    "task-0007": true,
+    "task-0017": true,
+    "task-0020": true,
+    "task-0012": true,
+    "task-0014": true,
+    "task-0011-map-2": true,
+    "task-0007-map-1": true,
+    "task-0018-map-0": true,
+    "task-0005-map-0": true,
+    "task-0024": true,
+    "task-0018": true,
+    "task-0011-map-1": true,
+    "task-0023": true,
+    "task-0022-map-0": true,
+    "task-0021": true,
+    "task-0022": true,
+    "task-0011": true,
+    "task-0005": true,
+    "task-0019-map-1": true,
+    "task-0011-map-0": true,
+    "task-0025": true,
+    "task-0026": true,
+    "task-0028": true,
+    "task-0027": true,
+    "task-0029": true,
+    "task-0019": true,
+    "task-0025-map-0": true,
+    "task-0019-map-0": true,
+    "task-0026-map-1": true,
+    "task-0005-map-2": true,
+    "task-0030-map-2": true,
+    "task-0018-map-1": true,
+    "task-0030": true,
+    "task-0031": true,
+    "task-0032": true,
+    "task-0034": true,
+    "task-0035": true
+  },
+  "task_lineage": {
+    "task-0005-map-0": {
+      "parent": "task-0005",
+      "model_type": "LSTM",
+      "epochs": 6,
+      "worker_id": "worker-2-4",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0005-map-1": {
+      "parent": "task-0005",
+      "model_type": "LSTM",
+      "epochs": 5,
+      "worker_id": "worker-2-5",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0014-map-0": {
+      "parent": "task-0014",
+      "model_type": "LSTM",
+      "epochs": 6,
+      "worker_id": "worker-2-2",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0014-map-1": {
+      "parent": "task-0014",
+      "model_type": "LSTM",
+      "epochs": 6,
+      "worker_id": "worker-2-2",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0012-map-0": {
+      "parent": "task-0012",
+      "model_type": "CNN",
+      "epochs": 7,
+      "worker_id": "worker-2-3",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0012-map-1": {
+      "parent": "task-0012",
+      "model_type": "CNN",
+      "epochs": 6,
+      "worker_id": "worker-2-3",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0023-map-0": {
+      "parent": "task-0023",
+      "model_type": "CNN",
+      "epochs": 10,
+      "worker_id": "worker-2-1",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0023-map-1": {
+      "parent": "task-0023",
+      "model_type": "CNN",
+      "epochs": 9,
+      "worker_id": "worker-2-1",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0005-map-2": {
+      "parent": "task-0005",
+      "model_type": "LSTM",
+      "epochs": 5,
+      "worker_id": "worker-2-5",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0033-map-0": {
+      "parent": "task-0033",
+      "model_type": "RNN",
+      "epochs": 7,
+      "worker_id": "worker-2-3",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0033-map-1": {
+      "parent": "task-0033",
+      "model_type": "RNN",
+      "epochs": 6,
+      "worker_id": "worker-2-4",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0033-map-2": {
+      "parent": "task-0033",
+      "model_type": "RNN",
+      "epochs": 6,
+      "worker_id": "worker-2-1",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0036-map-0": {
+      "parent": "task-0036",
+      "model_type": "RNN",
+      "epochs": 7,
+      "worker_id": "worker-2-1",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0036-map-1": {
+      "parent": "task-0036",
+      "model_type": "RNN",
+      "epochs": 6,
+      "worker_id": "worker-2-3",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    },
+    "task-0036-map-2": {
+      "parent": "task-0036",
+      "model_type": "RNN",
+      "epochs": 6,
+      "worker_id": "worker-2-3",
+      "status": "SUCCESS",
+      "dataset_path": ""
+    }
+  },
+  "virtual_budget": 9.50663888888947,
+  "task_counter": 61,
+  "latest_conclusions": [
+    {
+      "task_id": "task-0001",
+      "model_type": "RNN",
+      "timestamp": 1783397683.5311406,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.283, 0.186, 0.111, 0.021, -0.030]"
+    },
+    {
+      "task_id": "task-0002",
+      "model_type": "LSTM",
+      "timestamp": 1783397687.677382,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I agent agent autoscale agent agent\""
+    },
+    {
+      "task_id": "task-0003",
+      "model_type": "RNN",
+      "timestamp": 1783397694.7963557,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.186, 0.021, -0.099, -0.215, -0.307]"
+    },
+    {
+      "task_id": "task-0004",
+      "model_type": "CNN",
+      "timestamp": 1783397696.8296964,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.98%)"
+    },
+    {
+      "task_id": "task-0006",
+      "model_type": "CNN",
+      "timestamp": 1783397698.5480235,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.96%)"
+    },
+    {
+      "task_id": "task-0008",
+      "model_type": "LSTM",
+      "timestamp": 1783397704.5511925,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with with with\""
+    },
+    {
+      "task_id": "task-0010",
+      "model_type": "CNN",
+      "timestamp": 1783397706.6524565,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.97%)"
+    },
+    {
+      "task_id": "task-0009",
+      "model_type": "RNN",
+      "timestamp": 1783397708.0773668,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.301, 0.267, 0.242, 0.217, 0.191]"
+    },
+    {
+      "task_id": "task-0013",
+      "model_type": "RNN",
+      "timestamp": 1783397717.6661177,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.286, 0.230, 0.189, 0.161, 0.153]"
+    },
+    {
+      "task_id": "task-0015",
+      "model_type": "CNN",
+      "timestamp": 1783397719.5623379,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.83%)"
+    },
+    {
+      "task_id": "task-0007-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783397747.9589422,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0007-map-2",
+      "model_type": "LSTM",
+      "timestamp": 1783397749.4187837,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I babyray babyray babyray babyray babyray\""
+    },
+    {
+      "task_id": "task-0016",
+      "model_type": "LSTM",
+      "timestamp": 1783397756.9152777,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with agent agent\""
+    },
+    {
+      "task_id": "task-0007",
+      "model_type": "LSTM",
+      "timestamp": 1783397759.31665,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems agent systems\""
+    },
+    {
+      "task_id": "task-0017",
+      "model_type": "CNN",
+      "timestamp": 1783397776.8196514,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.99%)"
+    },
+    {
+      "task_id": "task-0020",
+      "model_type": "RNN",
+      "timestamp": 1783397781.0704224,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.380, 0.297, 0.293, 0.276, 0.278]"
+    },
+    {
+      "task_id": "task-0012",
+      "model_type": "CNN",
+      "timestamp": 1783397794.2733574,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.92%)"
+    },
+    {
+      "task_id": "task-0014",
+      "model_type": "LSTM",
+      "timestamp": 1783397805.7726877,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0011-map-2",
+      "model_type": "CNN",
+      "timestamp": 1783397815.314444,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 24.94%)"
+    },
+    {
+      "task_id": "task-0007-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783397818.238579,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I distributed systems systems systems systems\""
+    },
+    {
+      "task_id": "task-0007-map-1",
+      "model_type": "LSTM",
+      "timestamp": 1783397827.5459552,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0018-map-0",
+      "model_type": "CNN",
+      "timestamp": 1783397832.834539,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 62.73%)"
+    },
+    {
+      "task_id": "task-0018-map-0",
+      "model_type": "CNN",
+      "timestamp": 1783397834.326436,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 46.58%)"
+    },
+    {
+      "task_id": "task-0005-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783397847.7346263,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with babyray babyray babyray\""
+    },
+    {
+      "task_id": "task-0024",
+      "model_type": "CNN",
+      "timestamp": 1783397851.9166934,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.93%)"
+    },
+    {
+      "task_id": "task-0018",
+      "model_type": "CNN",
+      "timestamp": 1783397859.1524706,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 13.40%)"
+    },
+    {
+      "task_id": "task-0011-map-1",
+      "model_type": "CNN",
+      "timestamp": 1783397876.7172208,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 4 (신뢰도: 19.81%)"
+    },
+    {
+      "task_id": "task-0023",
+      "model_type": "CNN",
+      "timestamp": 1783397884.903473,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.99%)"
+    },
+    {
+      "task_id": "task-0011-map-1",
+      "model_type": "CNN",
+      "timestamp": 1783397891.361908,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 25.33%)"
+    },
+    {
+      "task_id": "task-0022-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783397895.5650237,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0021",
+      "model_type": "LSTM",
+      "timestamp": 1783397903.0285895,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with with with\""
+    },
+    {
+      "task_id": "task-0022",
+      "model_type": "LSTM",
+      "timestamp": 1783397909.3581114,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I babyray babyray babyray babyray babyray\""
+    },
+    {
+      "task_id": "task-0011",
+      "model_type": "CNN",
+      "timestamp": 1783397910.505914,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 15.18%)"
+    },
+    {
+      "task_id": "task-0005",
+      "model_type": "LSTM",
+      "timestamp": 1783397925.3607097,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I agent agent agent agent agent\""
+    },
+    {
+      "task_id": "task-0019-map-1",
+      "model_type": "LSTM",
+      "timestamp": 1783397948.6359882,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with with with\""
+    },
+    {
+      "task_id": "task-0018-map-0",
+      "model_type": "CNN",
+      "timestamp": 1783397951.046933,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 48.09%)"
+    },
+    {
+      "task_id": "task-0011-map-0",
+      "model_type": "CNN",
+      "timestamp": 1783397953.049695,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 31.10%)"
+    },
+    {
+      "task_id": "task-0022-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783397963.9591963,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0011-map-2",
+      "model_type": "CNN",
+      "timestamp": 1783397992.898857,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 23.14%)"
+    },
+    {
+      "task_id": "task-0025",
+      "model_type": "RNN",
+      "timestamp": 1783397995.66648,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.679, 0.750, 0.804, 0.851, 0.904]"
+    },
+    {
+      "task_id": "task-0026",
+      "model_type": "RNN",
+      "timestamp": 1783398011.6597548,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [-0.105, -0.118, -0.123, -0.125, -0.125]"
+    },
+    {
+      "task_id": "task-0028",
+      "model_type": "CNN",
+      "timestamp": 1783398022.6098201,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 99.90%)"
+    },
+    {
+      "task_id": "task-0027",
+      "model_type": "RNN",
+      "timestamp": 1783398025.2407863,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.214, 0.094, -0.004, -0.104, -0.204]"
+    },
+    {
+      "task_id": "task-0029",
+      "model_type": "CNN",
+      "timestamp": 1783398030.8512392,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 3 (신뢰도: 76.79%)"
+    },
+    {
+      "task_id": "task-0019",
+      "model_type": "LSTM",
+      "timestamp": 1783398046.0881844,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I babyray babyray babyray babyray babyray\""
+    },
+    {
+      "task_id": "task-0011-map-1",
+      "model_type": "CNN",
+      "timestamp": 1783398050.7859504,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 26.73%)"
+    },
+    {
+      "task_id": "task-0025-map-0",
+      "model_type": "RNN",
+      "timestamp": 1783398065.4031525,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.728, 0.753, 0.850, 0.949, 1.038]"
+    },
+    {
+      "task_id": "task-0019-map-0",
+      "model_type": "LSTM",
+      "timestamp": 1783398068.331024,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0026-map-1",
+      "model_type": "RNN",
+      "timestamp": 1783398076.1478224,
+      "conclusion": "[RNN 단일 실행 결론] [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.364, 0.303, 0.278, 0.232, 0.210]"
+    },
+    {
+      "task_id": "task-0005-map-2",
+      "model_type": "LSTM",
+      "timestamp": 1783398080.569102,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I autoscale autoscale autoscale autoscale autoscale\""
+    },
+    {
+      "task_id": "task-0030-map-2",
+      "model_type": "LSTM",
+      "timestamp": 1783398096.5944073,
+      "conclusion": "[LSTM 단일 실행 결론] [LSTM Generation Done] 텍스트 생성 결과 -> \"I with with with with with\""
+    },
+    {
+      "task_id": "task-0018-map-1",
+      "model_type": "CNN",
+      "timestamp": 1783398144.597615,
+      "conclusion": "[CNN 단일 실행 결론] [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 22.14%)"
+    },
+    {
+      "task_id": "task-0030",
+      "model_type": "LSTM",
+      "timestamp": 1783398148.7672026,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [LSTM Generation Done] 텍스트 생성 결과 -> \"I systems systems systems systems systems\""
+    },
+    {
+      "task_id": "task-0031",
+      "model_type": "RNN",
+      "timestamp": 1783398163.39353,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [RNN Forecast Done] 다음 5단계 시계열 예측값 -> [0.116, 0.104, 0.098, 0.095, 0.094]"
+    },
+    {
+      "task_id": "task-0032",
+      "model_type": "CNN",
+      "timestamp": 1783398173.4511285,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 20.32%)"
+    },
+    {
+      "task_id": "task-0034",
+      "model_type": "CNN",
+      "timestamp": 1783398216.7742157,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 1 (신뢰도: 22.22%)"
+    },
+    {
+      "task_id": "task-0035",
+      "model_type": "CNN",
+      "timestamp": 1783398242.311948,
+      "conclusion": "[FedAvg 분산 병합 결론] 수학적 가중치 결합 모델 추론 결과 -> [CNN Inference Done] 이미지 분석 결과 -> 예측 클래스: 7 (신뢰도: 56.85%)"
     }
   ]
 }
