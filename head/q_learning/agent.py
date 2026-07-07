@@ -266,9 +266,11 @@ class QLearningAgent:
                 for state_str, actions_dict in raw_q_table.items():
                     self.q_table[state_str] = {int(a): float(q) for a, q in actions_dict.items()}
                 
-                # Q-Table이 성공적으로 로드된 경우 기학습된 지식을 활용하기 위해 탐험율을 최소치로 즉시 전환
+                # Q-Table이 성공적으로 로드된 경우 기학습된 지식을 활용하기 위해 추론 모드일 때만 탐험율을 최소치로 즉시 전환
                 if self.q_table:
-                    self.epsilon = self.epsilon_min
+                    import head.state as gcs_state
+                    if not getattr(gcs_state, "Q_LEARNING_TRAINING_MODE", True):
+                        self.epsilon = self.epsilon_min
                     
                 print(f"[Q-Learning Agent] Q-Table 로드 성공. (보존된 상태수: {len(self.q_table)}) | 탐험율(Epsilon)을 {self.epsilon}으로 설정합니다.")
             except Exception as e:

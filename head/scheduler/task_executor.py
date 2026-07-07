@@ -750,16 +750,18 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             dashboard.log_event(f"[Resource Spend] [Mode: {gcs_state.SCHEDULER_MODE}] 비용 차감: ${task_cost:.4f} | 잔여 예산: ${gcs_state.virtual_budget:.4f}")
         
         # 자동 실험 데이터 누적 기록 (Benchmark Logger)
-        log_benchmark_metric(
-            scheduler_mode=gcs_state.SCHEDULER_MODE,
-            task_id=task_id,
-            model_type=model_type,
-            status="SUCCESS" if success else "FAILED",
-            execution_time=execution_time,
-            cost=task_cost,
-            delay=delay_time,
-            virtual_budget=gcs_state.virtual_budget
-        )
+        # Q-Learning의 온라인 학습 시에는 벤치마크 로그 작성을 스킵하고, 추론 평가 모드(Training이 꺼져 있을 때)나 static/dynamic 모드에서만 성능을 로깅합니다.
+        if not (gcs_state.SCHEDULER_MODE == "q_learning" and gcs_state.Q_LEARNING_TRAINING_MODE):
+            log_benchmark_metric(
+                scheduler_mode=gcs_state.SCHEDULER_MODE,
+                task_id=task_id,
+                model_type=model_type,
+                status="SUCCESS" if success else "FAILED",
+                execution_time=execution_time,
+                cost=task_cost,
+                delay=delay_time,
+                virtual_budget=gcs_state.virtual_budget
+            )
         
         # 실패 시 복구 재삽입
         if not success:
