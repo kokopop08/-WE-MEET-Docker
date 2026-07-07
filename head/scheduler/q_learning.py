@@ -102,11 +102,11 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         
         if peek_task:
             with gcs_state.registry_lock:
-                if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
+                if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()):
                     available_actions.append(0)
-                if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
+                if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()):
                     available_actions.append(1)
-                if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
+                if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()):
                     available_actions.append(2)
                     
         if run_scale_decisions and spot_scale < MAX_SPOT_SCALE:
@@ -136,7 +136,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             worker_info = None
             with gcs_state.registry_lock:
                 for wid, info in gcs_state.worker_registry.items():
-                    if info["node_type"] == target_type and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0:
+                    if info["node_type"] == target_type and info["status"] == "IDLE":
                         worker_id = wid
                         worker_info = info.copy()
                         gcs_state.worker_registry[wid]["status"] = "BUSY"
@@ -154,10 +154,29 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             
         elif action == 3:
             dashboard.log_event(f"[Q-Learning Action] HOLD 상태 선택 (대기열 크기: {q_len_real})")
+            if gcs_state.Q_LEARNING_TRAINING_MODE:
+                reward = -15.0 if u_sla == 1 else 1.0
+                agent.update_q_value(state, action, reward, state)
+                agent.save_q_table()
+                from head.scheduler.task_executor import log_online_training
+                log_online_training(state, action, reward, state, agent.epsilon)
+                dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (HOLD) | Reward={reward:.4f} | Epsilon={agent.epsilon:.4f}")
             break
             
         elif action == 4:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_A 트리거 -> Spot-A 노드 추가 증설")
+            if gcs_state.Q_LEARNING_TRAINING_MODE:
+                reward = 4.0 if u_sla == 1 else -1.5
+                if b_avail == 0:
+                    reward -= 3.0
+                else:
+                    reward += 3.0
+                agent.update_q_value(state, action, reward, state)
+                agent.save_q_table()
+                from head.scheduler.task_executor import log_online_training
+                log_online_training(state, action, reward, state, agent.epsilon)
+                dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (SCALE_SPOT_A) | Reward={reward:.4f} | Epsilon={agent.epsilon:.4f}")
+            
             if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
                 dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-A 2대 동시 증설")
                 if cluster_manager.scale_out_worker("spot_a"):
@@ -171,6 +190,16 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             
         elif action == 5:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_B 트리거 -> Spot-B 노드 추가 증설")
+            if gcs_state.Q_LEARNING_TRAINING_MODE:
+                reward = 1.0 if u_sla == 1 else 0.0
+                if b_avail == 0:
+                    reward += 2.0
+                agent.update_q_value(state, action, reward, state)
+                agent.save_q_table()
+                from head.scheduler.task_executor import log_online_training
+                log_online_training(state, action, reward, state, agent.epsilon)
+                dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (SCALE_SPOT_B) | Reward={reward:.4f} | Epsilon={agent.epsilon:.4f}")
+
             if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
                 dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-B 2대 동시 증설")
                 if cluster_manager.scale_out_worker("spot_b"):

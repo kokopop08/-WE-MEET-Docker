@@ -44,8 +44,8 @@ class QLearningAgent:
         self.decay_rate = decay_rate    # 감쇄율
         self.q_table_path = q_table_path
         if q_table_path == "q_table.json":
-            # 사용자가 인지하는 원래 경로로 원복하며, docker-compose 바인드 마운트를 통해 호스트와 연동됩니다.
-            self.q_table_path = os.path.join(os.path.dirname(__file__), "q_table.json")
+            # 사용자가 인지하는 공유 데이터 디렉토리(data/q_table.json) 경로로 영속화하여 호스트/컨테이너 간 일치시킵니다.
+            self.q_table_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/q_table.json"))
         
         # Q-테이블 초기화: {(state_str): {action: q_value}}
         self.q_table = {}
