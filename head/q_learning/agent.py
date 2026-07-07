@@ -44,6 +44,7 @@ class QLearningAgent:
         self.decay_rate = decay_rate    # 감쇄율
         self.q_table_path = q_table_path
         if q_table_path == "q_table.json":
+            # 사용자가 인지하는 원래 경로로 원복하며, docker-compose 바인드 마운트를 통해 호스트와 연동됩니다.
             self.q_table_path = os.path.join(os.path.dirname(__file__), "q_table.json")
         
         # Q-테이블 초기화: {(state_str): {action: q_value}}
@@ -62,14 +63,14 @@ class QLearningAgent:
         # 기본 요금 정보 세팅 (cost_model.yaml 로드 실패 시 대체 대비)
         if not self.nodes_config:
             self.nodes_config = {
-                "on_demand": {"cost_per_hour": 1.0, "gpu_scale_factor": 1.0},
-                "spot_a": {"cost_per_hour": 0.4, "gpu_scale_factor": 0.6},
-                "spot_b": {"cost_per_hour": 0.2, "gpu_scale_factor": 0.3}
+                "on_demand": {"cost_per_hour": 0.710, "gpu_scale_factor": 1.0},
+                "spot_a": {"cost_per_hour": 0.220, "gpu_scale_factor": 0.6},
+                "spot_b": {"cost_per_hour": 0.090, "gpu_scale_factor": 0.3}
             }
 
         # 보상 설계용 핵심 가중치 상수
         self.SUCCESS_REWARD = 10.0
-        self.COST_WEIGHT = 2.0
+        self.COST_WEIGHT = 1000.0   # 시간 환산 비용이 매우 작으므로 감점 체감을 위해 2.0에서 1000.0으로 대폭 상향
         self.DELAY_PENALTY_WEIGHT = 5.0
 
         # 행동 정의 (Action Space) - 6대 행동 확장
@@ -250,8 +251,20 @@ class QLearningAgent:
         """로컬 저장소로부터 기존에 학습되어 저장된 Q-Table을 불러옵니다."""
         if os.path.exists(self.q_table_path):
             try:
-                with open(self.q_table_path, 'r', encoding='utf-8') as f:
-                    self.q_table = json.load(f)
+                if os.path.getsize(self.q_table_path) == 0:
+                    raw_q_table = {}
+                else:
+                    with open(self.q_table_path, 'r', encoding='utf-8') as f:
+                        raw_q_table = json.load(f)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"[Q-Learning Agent 경고] Q-Table 파일이 비어 있거나 손상되어 빈 딕셔너리로 초기화합니다: {e}")
+                raw_q_table = {}
+            
+            try:
+                # 중복 저장 방지를 위해 JSON 문자열 액션 키를 정수(int) 키로 명시적 형변환하여 로드
+                self.q_table = {}
+                for state_str, actions_dict in raw_q_table.items():
+                    self.q_table[state_str] = {int(a): float(q) for a, q in actions_dict.items()}
                 
                 # Q-Table이 성공적으로 로드된 경우 기학습된 지식을 활용하기 위해 탐험율을 최소치로 즉시 전환
                 if self.q_table:

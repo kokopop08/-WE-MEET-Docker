@@ -40,8 +40,12 @@ latest_conclusions = []
 """list: 태스크별 최종 FedAvg 병합 및 추론 결론 텍스트의 누적 레포지토리."""
 
 # 스케줄러 구동 모드
-SCHEDULER_MODE = "dynamic"
+SCHEDULER_MODE = "q_learning"
 """str: 현재 활성화된 스케줄러 구동 모드 ("static", "dynamic", "q_learning")."""
+
+# Q-Learning 실행 모드 설정 (True: 온라인 추가 학습 진행, False: 사전 학습본으로 고속 추론 및 배정만 수행)
+Q_LEARNING_TRAINING_MODE = True
+"""bool: Q-Learning의 온라인 학습 및 테이블 실시간 영속화 여부를 결정하는 모드 플래그."""
 
 # Docker SDK 클라이언트 공통 객체
 DOCKER_CLIENT = None # Docker API 서버와 통신, 컨테이너 관리

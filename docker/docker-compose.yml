@@ -19,7 +19,8 @@ services:
     command: python -m head.head
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # 호스트 Docker 데몬 연동
-      - babyray-data:/app/data # 공유 데이터 폴더 마운트
+      - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트
+      - ../head/q_learning:/app/head/q_learning # Q-Table 호스트 실시간 동기화 마운트
     ports:
       - "50051:50051" # gRPC 포트
       - "8080:8080" # 모니터링 대시보드 포트 추가
@@ -47,7 +48,7 @@ services:
       - head
     command: python -m worker.worker --id worker-1 --type on_demand --port 50052
     volumes:
-      - babyray-data:/app/data # 공유 데이터 폴더 마운트
+      - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트
     deploy:
       resources:
         limits:

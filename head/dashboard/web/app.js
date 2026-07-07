@@ -257,7 +257,8 @@ function updateScaleTimeline(logs) {
         // 로그 형식 분석: "[2026-07-04 16:15:45] [Docker SDK] ..."
         const timestampMatch = log.match(/^\[(.*?)\]\s(.*)$/);
         if (!timestampMatch) return;
-        const timestamp = timestampMatch[1].split(" ")[1]; // HH:MM:SS 획득
+        const rawTime = timestampMatch[1];
+        const timestamp = rawTime.includes(" ") ? rawTime.split(" ")[1] : rawTime; // 날짜 공백 유무에 맞게 안전하게 획득
         const msg = timestampMatch[2];
 
         if (msg.includes("신규 Spot 컨테이너 가동 완료") || msg.includes("워커 신규 등록")) {
@@ -274,7 +275,7 @@ function updateScaleTimeline(logs) {
             }
         } else if (msg.includes("IDLE 컨테이너 회수 성공") || msg.includes("워커 정상 퇴장")) {
             const workerIdMatch = msg.match(/ID='(.*?)'/) || msg.match(/회수 성공:\s*(.*?)$/);
-            const wId = workerIdMatch ? workerIdMatch[1].replace(/['\s]/g, '') : "worker";
+            const wId = (workerIdMatch && workerIdMatch[1]) ? workerIdMatch[1].replace(/['\s]/g, '') : "worker";
             if (!timelineEvents.some(e => e.time === timestamp && e.desc.includes(wId))) {
                 timelineEvents.push({
                     type: "scale-in",
@@ -551,3 +552,26 @@ async function updateDashboard() {
 // 1.2초 주기로 동적 모니터링 갱신 기동
 setInterval(updateDashboard, 1200);
 updateDashboard();
+
+// Reset 버튼 이벤트 연동 (새로고침 불필요)
+document.addEventListener("DOMContentLoaded", () => {
+    const btnReset = document.getElementById("btn-reset");
+    if (btnReset) {
+        btnReset.addEventListener("click", async () => {
+            if (confirm("정말로 클러스터 가용 예산 및 성공/실패 벤치마크 상태를 초기화하시겠습니까?")) {
+                try {
+                    const res = await fetch("/api/reset");
+                    const resData = await res.json();
+                    if (resData.success) {
+                        alert("GCS 상태 초기화 성공!");
+                        updateDashboard();
+                    } else {
+                        alert("GCS 상태 초기화 실패: " + resData.message);
+                    }
+                } catch (e) {
+                    alert("초기화 요청 중 네트워크 오류 발생: " + e);
+                }
+            }
+        });
+    }
+});

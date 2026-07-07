@@ -30,7 +30,9 @@ def log_benchmark_metric(scheduler_mode, task_id, model_type, status, execution_
     """
     data/benchmark_results.csv 파일에 3대 스케줄러의 성능 비교 데이터를 누적 기록합니다.
     """
-    csv_file = "data/benchmark_results.csv"
+    # 3대 스케줄러 알고리즘별로 벤치마크 데이터를 물리적으로 각각 다른 CSV 파일에 격리 저장
+    mode_str = str(scheduler_mode).strip().lower()
+    csv_file = f"data/benchmark_results_{mode_str}.csv"
     try:
         os.makedirs(os.path.dirname(csv_file), exist_ok=True)
         file_exists = os.path.exists(csv_file)
@@ -733,11 +735,17 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             b_avail_next = 0 if gcs_state.virtual_budget < 0.7 else 1
             next_state = (w_mix_next, a_mix_next, u_sla_next, b_avail_next)
             
-            agent.update_q_value(state, action, reward, next_state)
-            agent.save_q_table()
-            
-            dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
-            dashboard.log_event(f"[Q-Learning Update] 잔여 가상 예산: ${gcs_state.virtual_budget:.4f}달러")
+            if gcs_state.Q_LEARNING_TRAINING_MODE:
+                agent.update_q_value(state, action, reward, next_state)
+                agent.save_q_table()
+                
+                # 실시간 온라인 훈련(Training) 기록을 CSV 히스토리 파일에 추가 기록
+                log_online_training(state, action, reward, next_state, agent.epsilon)
+                
+                dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
+                dashboard.log_event(f"[Q-Learning Update] 잔여 가상 예산: ${gcs_state.virtual_budget:.4f}달러")
+            else:
+                dashboard.log_event(f"[Q-Learning Inference] State={state} | Action={action} | Reward={reward:.4f} | NextState={next_state} (학습/저장 생략)")
         else:
             dashboard.log_event(f"[Resource Spend] [Mode: {gcs_state.SCHEDULER_MODE}] 비용 차감: ${task_cost:.4f} | 잔여 예산: ${gcs_state.virtual_budget:.4f}")
         
@@ -775,3 +783,32 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             with gcs_state.queue_lock:
                 gcs_state.task_queue.append(task)
             gcs_state.save_gcs_state()
+
+def log_online_training(state, action, reward, next_state, epsilon):
+    """Q-Learning 온라인 훈련 이력(History) 데이터를 CSV에 실시간으로 추가(Append) 기록합니다."""
+    csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/online_training_history.csv"))
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    
+    # 상태 튜플 문자열 변형
+    state_str = f"{state[0]}_{state[1]}_{state[2]}_{state[3]}"
+    next_state_str = f"{next_state[0]}_{next_state[1]}_{next_state[2]}_{next_state[3]}"
+    
+    file_exists = os.path.exists(csv_path)
+    try:
+        import csv
+        import time
+        with open(csv_path, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(["timestamp", "state", "action", "reward", "next_state", "epsilon"])
+            
+            writer.writerow([
+                time.strftime("%Y-%m-%d %H:%M:%S"),
+                state_str,
+                action,
+                round(reward, 4),
+                next_state_str,
+                round(epsilon, 4)
+            ])
+    except Exception as e:
+        print(f"[Q-Learning Logger 경고] 온라인 훈련 로그 CSV 저장 중 실패: {e}")

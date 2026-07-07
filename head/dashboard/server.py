@@ -82,6 +82,28 @@ class DashboardHTTPHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
             return
 
+        elif self.path == "/api/reset":
+            import head.state as state
+            
+            with state.registry_lock:
+                with state.queue_lock:
+                    state.task_queue.clear()
+                    state.task_status.clear()
+                    state.completed_tasks_cache.clear()
+                    state.latest_conclusions.clear()
+                    state.virtual_budget = 10.0
+                    state.task_counter = 0
+                    
+            state.save_gcs_state()
+            log_event("[Dashboard GCS] 사용자의 요청에 의해 GCS 클러스터 상태가 초기화되었습니다.")
+            
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"success": True, "message": "GCS state reset success."}).encode("utf-8"))
+            return
+
         elif self.path in ["/", "/index.html"]:
             self.serve_static_file("index.html", "text/html; charset=utf-8")
             return

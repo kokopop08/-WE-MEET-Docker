@@ -14,9 +14,12 @@ from head.q_learning.agent import QLearningAgent
 def run_offline_pretraining(episodes=25000):
     print("=== [Pretrain Simulator] 오프라인 고속 Q-Learning 에이전트 사전 훈련을 개시합니다. ===")
     
+    # cost_model.yaml 절대 경로 탐색
+    cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../common/cost_model.yaml'))
+    
     # Q-Learning 에이전트 인스턴스 초기화 (훈련을 위해 Epsilon을 1.0으로 강제 세팅하여 활발히 탐험)
     agent = QLearningAgent(
-        cost_model_path=None, 
+        cost_model_path=cost_model_path, 
         q_table_path="q_table.json",
         alpha=0.1,
         gamma=0.9,
@@ -29,12 +32,8 @@ def run_offline_pretraining(episodes=25000):
     # 0: ASSIGN_OD, 1: ASSIGN_SPOT_A, 2: ASSIGN_SPOT_B, 3: HOLD, 4: SCALE_OUT_SPOT_A, 5: SCALE_OUT_SPOT_B
     actions = [0, 1, 2, 3, 4, 5]
     
-    # 가상의 환경 보상 파라미터 모사
-    # 상태 포맷: (w_mix, a_mix, u_sla, b_avail)
-    # w_mix: 0 (비어있음), 1 (CNN), 2 (RNN/LSTM), 3 (혼재)
-    # a_mix: 0~7 (OD=1, SpotA=2, SpotB=4 가용 비트맵 조합)
-    # u_sla: 0 (여유), 1 (임박)
-    # b_avail: 0 (위기), 1 (충분)
+    # CSV 로깅용 데이터 수집 리스트
+    pretrain_logs = []
     
     for ep in range(episodes):
         # 1. 초기 임의의 상태 생성
@@ -51,33 +50,35 @@ def run_offline_pretraining(episodes=25000):
         # 3. 가상 환경의 1-Step 물리 전이 및 보상 계산
         reward = 0.0
         
-        # 기본 요금 설정 (cost_model.yaml 기준)
-        cost_od = 0.710
-        cost_spot_a = 0.220
-        cost_spot_b = 0.120
+        # nodes_config가 정상 로드되었으므로 이를 활용하여 기본 요금 파싱 (없다면 YAML 폴백 활용)
+        cost_od = agent.nodes_config.get("on_demand", {}).get("cost_per_hour", 0.710)
+        cost_spot_a = agent.nodes_config.get("spot_a", {}).get("cost_per_hour", 0.220)
+        cost_spot_b = agent.nodes_config.get("spot_b", {}).get("cost_per_hour", 0.090)
         
         # 3-1. 예산 가용성 팩터(b_avail)에 따른 보상 제약
         if b_avail == 0:  # 예산 위기 상황
             if action in [0, 4]:  # 고비용 OD 배정 또는 Spot-A 증설
-                reward -= 5.0  # 강력한 요금 초과 페널티
+                reward -= 3.0  # 요금 초과 페널티 (Spot-A 증설에 대해 리스크 과도 회피를 막기 위해 -5.0에서 -3.0으로 완화)
             elif action in [2, 5]:  # 초저렴 Spot-B 배정 및 증설
                 reward += 2.0  # 알뜰 의사결정 인센티브
             elif action == 3:  # HOLD 보류
                 reward += 1.0  # 가격 지출을 방지했으므로 약간의 보상
         else:  # 예산 풍족 상황
             if action in [0, 1, 4]:
-                reward += 1.5  # 가속 성능 활용 인센티브
+                reward += 3.0  # 가속 성능 활용 인센티브 (초반에 Spot-A 및 On-Demand 자원을 활성화하도록 보상 대폭 강화)
         
         # 3-2. SLA 임박도(u_sla)에 따른 보상 제약
         if u_sla == 1:  # 마감 임박 상황
             if action == 3:  # HOLD 지연 보류 선택 시 에이징 대기 페널티
-                reward -= 10.0  # 초강력 기아 및 지연 페널티 부과!
+                reward -= 15.0  # 초강력 기아 및 지연 페널티 부과 (HOLD 원천 기피 유도)
             elif action in [0, 1]:  # 즉시 고성능 자원(OD, Spot-A)에 배정
-                reward += 4.0  # SLA 수렴 보너스
+                reward += 6.0  # SLA 수렴 보너스 (성능 자원 활용 극대화)
             elif action == 2:  # 저성능 Spot-B 배정
-                reward -= 2.0  # 마감이 급한데 느린 노드를 써서 페널티
-            elif action in [4, 5]:  # 증설
-                reward += 2.0  # 동적 대응 보너스
+                reward -= 5.0  # 마감이 급한데 느린 노드를 써서 페널티 대폭 강화 (Spot-B 편향 탈피의 핵심 트리거)
+            elif action == 4:  # Spot-A 증설
+                reward += 4.0  # 마감 임박 시 성능형 자원 증설 강력 보상
+            elif action == 5:  # Spot-B 증설
+                reward += 1.0  # 저성능 증설은 낮은 보너스 부여
         else:  # 마감 여유 상황
             if action == 3:  # HOLD 보류
                 reward += 1.0  # 불필요한 돈을 쓰지 않고 숨을 골랐으므로 약간의 보상
@@ -107,10 +108,29 @@ def run_offline_pretraining(episodes=25000):
         # 5. Q-Value 업데이트 및 Epsilon 감쇄
         agent.update_q_value(state, action, reward, next_state, next_available_actions=actions)
         
-    # 6. 완성된 Q-Table 저장
+        # 6. CSV 로깅용 데이터 수집
+        state_str = f"{state[0]}_{state[1]}_{state[2]}_{state[3]}"
+        pretrain_logs.append([ep + 1, state_str, action, round(reward, 4), round(agent.epsilon, 6)])
+        
+    # 7. 완성된 Q-Table 저장
     agent.save_q_table()
     print(f"=== [Pretrain Simulator] 사전 학습 성공 완료! 수렴된 상태 수: {len(agent.q_table)} ===")
     print(f"=== [Pretrain Simulator] 최종 감쇄된 Epsilon: {agent.epsilon:.4f} ===")
+    
+    # 8. 학습 과정 히스토리 CSV 파일 출력 저장
+    csv_file = "data/pretrain_history.csv"
+    try:
+        os.makedirs(os.path.dirname(csv_file), exist_ok=True)
+        import csv
+        with open(csv_file, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            # 헤더 작성
+            writer.writerow(["episode", "state", "action", "reward", "epsilon"])
+            # 데이터 로깅
+            writer.writerows(pretrain_logs)
+        print(f"=== [Pretrain Simulator] 에피소드 반복별 학습 데이터를 CSV로 성공적으로 저장했습니다: {csv_file} ===")
+    except Exception as e:
+        print(f"[Pretrain Simulator 경고] 사전 학습 CSV 저장 중 오류 발생: {e}")
 
 if __name__ == "__main__":
     run_offline_pretraining()

@@ -10,6 +10,7 @@ import random
 import head.state as state # state = 시스템의 전역 변수를 가지고 있음
 import head.dashboard.server as dashboard
 from head.resource_guard import get_gpu_free_memory, is_host_resource_sufficient
+from common.failure_simulator import FailureSimulator # 장애 시뮬레이션 판단 로직 중앙화 모듈
 
 # SCALE-IN을 하는 데 핵심 -> 재시작시 죽지 않은 컨테이너 제거
 def cleanup_zombie_containers():
@@ -72,9 +73,9 @@ def cleanup_zombie_containers():
 def _load_node_config(node_type):
     """cost_model.yaml에서 노드 스펙 및 GPU 스케일 팩터를 단 한 번만 로드합니다."""
     # Default fallback values
-    cpu_limit = 1.5 if node_type == "spot_a" else 0.8
+    cpu_limit = 1.0 if node_type == "spot_a" else 0.5
     mem_limit_mb = 1024 if node_type == "spot_a" else 512
-    gpu_scale = 0.85 if node_type == "spot_a" else 0.35
+    gpu_scale = 0.6 if node_type == "spot_a" else 0.3
     
     cost_model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
     if os.path.exists(cost_model_path):
@@ -157,7 +158,7 @@ def scale_out_worker(node_type):
         return False
 
     # 0. 공급 부족(OutOfCapacity / Provisioning 거절) 30% 확률 모사
-    if node_type in ["spot_a", "spot_b"] and random.random() < 0.3:
+    if FailureSimulator.check_out_of_capacity(node_type):
         dashboard.log_event(f"[Docker SDK] OutOfCapacity 감지: Spot-{node_type[-1].upper()} 자원 공급 부족으로 인해 노드 증설이 거절되었습니다.")
         return False
 
@@ -392,10 +393,8 @@ def start_spot_eviction_loop():
                 continue
                 
             for wid, n_type in spot_workers:
-                base_prob = preemption_probs.get(n_type, 0.3)
-                eviction_prob = base_prob if p_spot == 1 else (base_prob * 0.25)
-                
-                if random.random() < eviction_prob:
+                eviction_prob = FailureSimulator.EVICTION_BASE_PROB.get(n_type, 0.3) if p_spot == 1 else (FailureSimulator.EVICTION_BASE_PROB.get(n_type, 0.3) * FailureSimulator.EVICTION_IDLE_FACTOR)
+                if FailureSimulator.check_eviction(n_type, p_spot, preemption_probs):
                     container_ref = f"babyray-{wid}"
                     dashboard.log_event(f"[Eviction Daemon] !!! 스팟 강제 회수(Eviction) 발생 !!! -> 대상: {wid} (확률: {eviction_prob*100:.1f}%)")
                     

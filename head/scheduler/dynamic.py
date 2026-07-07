@@ -8,7 +8,7 @@ import head.state as gcs_state
 import head.cluster_manager as cluster_manager
 import head.dashboard.server as dashboard
 
-def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worker, get_next_runnable_task, get_current_spot_scale):
+def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
     """
     Dynamic 스케줄러의 1주기 의사결정 및 연산 할당 작업을 수행합니다.
     - 실시간 부하 모니터링 기반 오토스케일링
@@ -17,54 +17,54 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
     """
     spot_scale = get_current_spot_scale()
     
-    # 1. 평균 부하 또는 큐 대기 적체 기반 스케일아웃 정책
-    with gcs_state.registry_lock:
-        active_workers = list(gcs_state.worker_registry.values())
-        
-    with gcs_state.queue_lock:
-        q_len_real = len(gcs_state.task_queue)
-    
-    if active_workers:
-        avg_cpu = sum(info.get("cpu", 0.0) for info in active_workers) / len(active_workers)
-        avg_mem = sum(info.get("mem", 0.0) for info in active_workers) / len(active_workers)
-    else:
-        avg_cpu, avg_mem = 0.0, 0.0
-        
-    # 대기 큐 내부 태스크 중 메모리 집약형 모형인 LSTM 탑재 여부 확인
-    has_lstm = False
-    with gcs_state.queue_lock:
-        has_lstm = any(t.get("model_type") == "LSTM" for t in gcs_state.task_queue)
-        
-    # 평균 리소스 부하가 심각하거나 LSTM 모형이 포함된 경우 고성능 Spot-A를, 그렇지 않으면 Spot-B를 동적 선택
-    target_type = "spot_a" if (avg_cpu > 75.0 or avg_mem > 70.0 or has_lstm) else "spot_b"
-        
-    # 대기 큐에 작업이 3개 이상 밀렸거나 평균 리소스 부하가 높을 시 스케일아웃
-    if q_len_real >= 8 and spot_scale < MAX_SPOT_SCALE - 1:
-        dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-{target_type[-1].upper()} 노드 2대 동시 증설")
-        if cluster_manager.scale_out_worker(target_type):
-            spot_scale += 1
-        if cluster_manager.scale_out_worker(target_type):
-            spot_scale += 1
-    elif ((avg_cpu > 70.0 or avg_mem > 70.0) or q_len_real >= 3) and spot_scale < MAX_SPOT_SCALE:
-        dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 적체({q_len_real}개) 또는 고부하 감지 -> Spot-{target_type[-1].upper()} 노드 1대 증설")
-        if cluster_manager.scale_out_worker(target_type):
-            spot_scale += 1
+    # 1. 평균 부하 또는 큐 대기 적체 기반 스케일아웃 정책 (지정된 스케일 결정 주기에만 실행)
+    if run_scale_decisions:
+        with gcs_state.registry_lock:
+            active_workers = list(gcs_state.worker_registry.values())
             
-    if q_len_real == 0 and avg_cpu < 20.0 and avg_mem < 20.0:
-        scale_in_timer += 1.0
-        if scale_in_timer >= 3.0 and spot_scale > 0:
-            # 요금이 더 비싼 spot_a를 우선 회수하여 예산 효율을 최적화
-            with gcs_state.registry_lock:
-                has_spot_a = any(info.get("node_type") == "spot_a" for info in gcs_state.worker_registry.values())
-                has_spot_b = any(info.get("node_type") == "spot_b" for info in gcs_state.worker_registry.values())
+        with gcs_state.queue_lock:
+            q_len_real = len(gcs_state.task_queue)
+        
+        if active_workers:
+            avg_cpu = sum(info.get("cpu", 0.0) for info in active_workers) / len(active_workers)
+            avg_mem = sum(info.get("mem", 0.0) for info in active_workers) / len(active_workers)
+        else:
+            avg_cpu, avg_mem = 0.0, 0.0
+            
+        # 대기 큐 내부 태스크 중 메모리 집약형 모형인 LSTM 탑재 여부 확인
+        has_lstm = False
+        with gcs_state.queue_lock:
+            has_lstm = any(t.get("model_type") == "LSTM" for t in gcs_state.task_queue)
+            
+        # 평균 리소스 부하가 심각하거나 LSTM 모형이 포함된 경우 고성능 Spot-A를, 그렇지 않으면 Spot-B를 동적 선택
+        target_type = "spot_a" if (avg_cpu > 75.0 or avg_mem > 70.0 or has_lstm) else "spot_b"
+            
+        # 대기 큐에 작업이 3개 이상 밀렸거나 평균 리소스 부하가 높을 시 스케일아웃
+        if q_len_real >= 8 and spot_scale < MAX_SPOT_SCALE - 1:
+            dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-{target_type[-1].upper()} 노드 2대 동시 증설")
+            if cluster_manager.scale_out_worker(target_type):
+                spot_scale += 1
+            if cluster_manager.scale_out_worker(target_type):
+                spot_scale += 1
+        elif ((avg_cpu > 70.0 or avg_mem > 70.0) or q_len_real >= 3) and spot_scale < MAX_SPOT_SCALE:
+            dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 적체({q_len_real}개) 또는 고부하 감지 -> Spot-{target_type[-1].upper()} 노드 1대 증설")
+            if cluster_manager.scale_out_worker(target_type):
+                spot_scale += 1
                 
-            reclaim_type = "spot_a" if has_spot_a else "spot_b"
-            dashboard.log_event(f"[Dynamic Scale-In] 저부하 유휴 상태 3초 유지 -> Spot-{reclaim_type[-1].upper()} 워커 회수")
-            if cluster_manager.scale_in_specific_worker(reclaim_type):
-                spot_scale -= 1
-                scale_in_timer = 0.0
-    else:
-        scale_in_timer = 0.0
+        if q_len_real == 0 and avg_cpu < 20.0 and avg_mem < 20.0:
+            scale_in_timer += 1.0
+            if scale_in_timer >= 3.0 and spot_scale > 0:
+                # 요금이 더 비싼 spot_a를 우선 회수하여 예산 효율을 최적화
+                with gcs_state.registry_lock:
+                    has_spot_a = any(info.get("node_type") == "spot_a" for info in gcs_state.worker_registry.values())
+                    
+                reclaim_type = "spot_a" if has_spot_a else "spot_b"
+                dashboard.log_event(f"[Dynamic Scale-In] 저부하 유휴 상태 3초 유지 -> Spot-{reclaim_type[-1].upper()} 워커 회수")
+                if cluster_manager.scale_in_specific_worker(reclaim_type):
+                    spot_scale -= 1
+                    scale_in_timer = 0.0
+        else:
+            scale_in_timer = 0.0
         
     # 2. 리소스 인지형 간섭 회피 분산 배정 (Spread & Staggered & Backfilling)
     deferred_tasks = []

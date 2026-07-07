@@ -229,7 +229,16 @@ def serve():
     Head Node 메인 서비스 데몬을 구동합니다.
     좀비 컨테이너 소거 비동기 스레드, 대시보드 웹 서버, gRPC 서버, Q-Learning 백그라운드 스케줄러 루프를 초기화합니다.
     """
-    # 0. GCS 상태 파일 복구 (재시작 시 상태 원복을 위해 복구)
+    # 0. 도커가 재부팅되거나 새로 기동될 때 이전 벤치마크 태스크 잔재 및 통계를 완전 삭제하기 위해 백업 파일 소거
+    gcs_backup_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../data/gcs_state.json'))
+    if os.path.exists(gcs_backup_path):
+        try:
+            os.remove(gcs_backup_path)
+            print("[Head Boot] 이전 실행의 GCS 영속 상태 백업(gcs_state.json)을 강제 소거하고 초기 통계로 세팅했습니다.")
+        except Exception as e:
+            print(f"[Head Boot 경고] 백업 파일 소거 실패: {e}")
+
+    # GCS 상태 파일 복구 (파일 소거 후이므로 초기 상태로 세팅됨)
     state.load_gcs_state()
 
     # 0.1. 잔존 좀비 컨테이너 동기 청소 (부팅 전 이전 라이프사이클의 잔재 완전 소거를 통한 정합성 확보)

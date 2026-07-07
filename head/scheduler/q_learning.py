@@ -8,40 +8,46 @@ import head.state as gcs_state
 import head.cluster_manager as cluster_manager
 import head.dashboard.server as dashboard
 
-def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, run_task_on_worker, get_next_runnable_task, get_current_spot_scale):
+def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
     """
-    Q-Learning 스케줄러의 1주기 의사결정 및 연산 할당 작업을 수행합니다.
+    Q-Learning 스케줄러 of 1주기 의사결정 및 연산 할당 작업을 수행합니다.
     - 4차원 상태 공간 (w_mix, a_mix, u_sla, b_avail) 기반 6대 행동 스케줄링
     - 예산 고갈 시 Action Masking 안전 가드
     """
+    # 훈련 모드 여부에 맞게 에이전트 탐험율(Epsilon)을 실시간 동기화 제어
+    if not gcs_state.Q_LEARNING_TRAINING_MODE:
+        agent.epsilon = 0.0  # 추론형 모드: 완전히 기존 Q-Table 지식만을 근거로 판단 (탐험 배제)
+    # 훈련 모드에서는 update_q_value()의 decay_rate(0.995)에 의해 epsilon_min(0.05)까지 자연 감쇄
+
     spot_scale = get_current_spot_scale()
     
-    # 1. 룰 기반 Scale-In 작동 보완 (스팟 노드 유휴 시간 감지 회수)
-    with gcs_state.registry_lock:
-        idle_spot_a = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_a" and info["status"] == "IDLE")
-        idle_spot_b = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_b" and info["status"] == "IDLE")
-        
-    if idle_spot_a > 0 or idle_spot_b > 0:
-        empty_queue_duration += 1.0
-    else:
-        empty_queue_duration = 0.0
-        
-    if empty_queue_duration >= 3.0 and spot_scale > 0:
-        # 비용 효율을 위해 가동 비용이 비싼 spot_a를 우선 회수하고 없으면 spot_b를 회수합니다.
+    # 1. 룰 기반 Scale-In 작동 보완 (지정된 스케일 결정 주기에만 실행)
+    if run_scale_decisions:
         with gcs_state.registry_lock:
-            has_spot_a = any(info["node_type"] == "spot_a" for info in gcs_state.worker_registry.values())
-            has_spot_b = any(info["node_type"] == "spot_b" for info in gcs_state.worker_registry.values())
-        
-        if has_spot_a:
-            if cluster_manager.scale_in_specific_worker("spot_a"):
-                dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-A 노드 안전 회수")
-                spot_scale -= 1
-                empty_queue_duration = 0.0
-        elif has_spot_b:
-            if cluster_manager.scale_in_specific_worker("spot_b"):
-                dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-B 노드 안전 회수")
-                spot_scale -= 1
-                empty_queue_duration = 0.0
+            idle_spot_a = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_a" and info["status"] == "IDLE")
+            idle_spot_b = sum(1 for info in gcs_state.worker_registry.values() if info["node_type"] == "spot_b" and info["status"] == "IDLE")
+            
+        if idle_spot_a > 0 or idle_spot_b > 0:
+            empty_queue_duration += 1.0
+        else:
+            empty_queue_duration = 0.0
+            
+        if empty_queue_duration >= 3.0 and spot_scale > 0:
+            # 비용 효율을 위해 가동 비용이 비싼 spot_a를 우선 회수하고 없으면 spot_b를 회수합니다.
+            with gcs_state.registry_lock:
+                has_spot_a = any(info["node_type"] == "spot_a" for info in gcs_state.worker_registry.values())
+                has_spot_b = any(info["node_type"] == "spot_b" for info in gcs_state.worker_registry.values())
+            
+            if has_spot_a:
+                if cluster_manager.scale_in_specific_worker("spot_a"):
+                    dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-A 노드 안전 회수")
+                    spot_scale -= 1
+                    empty_queue_duration = 0.0
+            elif has_spot_b:
+                if cluster_manager.scale_in_specific_worker("spot_b"):
+                    dashboard.log_event("[Q-Learning Scale-In] 무부하 3초 유지로 인한 Spot-B 노드 안전 회수")
+                    spot_scale -= 1
+                    empty_queue_duration = 0.0
 
     # 2. Q-Learning 의사결정 루프 (Backfilling 적용)
     deferred_tasks = []
@@ -103,7 +109,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" and info.get("mem", 0.0) < 90.0 for info in gcs_state.worker_registry.values()):
                     available_actions.append(2)
                     
-        if spot_scale < MAX_SPOT_SCALE:
+        if run_scale_decisions and spot_scale < MAX_SPOT_SCALE:
             available_actions.append(4)  # SCALE_OUT_SPOT_A
             available_actions.append(5)  # SCALE_OUT_SPOT_B
 
