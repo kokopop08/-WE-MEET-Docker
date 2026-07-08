@@ -15,6 +15,7 @@ pyyaml>=6.0
 pandas>=2.0.0
 matplotlib>=3.8.0
 numpy>=1.26.0
+seaborn
 
 # 4. PyTorch (Included in pytorch base image, but listed for local env dev)
 torch

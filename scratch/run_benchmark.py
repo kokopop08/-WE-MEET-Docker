@@ -19,7 +19,7 @@ class SimulatedCluster:
     Static, Dynamic, Q-Learning 3개 정책별 비교 실험을 진행하기 위한
     인프라 상태 및 Map-Reduce 태스크 라이프사이클 가상 시뮬레이션 환경.
     """
-    def __init__(self, mode, q_table_path="head/q_table.json"):
+    def __init__(self, mode, q_table_path="head/q_learning/q_table.json"):
         self.mode = mode
         self.q_table_path = q_table_path
         

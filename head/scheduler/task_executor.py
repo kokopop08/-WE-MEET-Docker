@@ -24,7 +24,7 @@ from head.q_learning.agent import QLearningAgent
 # - scheduler.py와 scheduler/core.py가 각각 생성하던 에이전트를 공통 유틸로 통합하여 
 #   비용 모델과 학습 Q-Table 인스턴스의 메모리 정합성 및 일관성을 확보합니다.
 COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../common/cost_model.yaml'))
-agent = QLearningAgent(cost_model_path=COST_MODEL_PATH)
+agent = QLearningAgent(cost_model_path=COST_MODEL_PATH, decay_rate=0.999, epsilon_min=0.10)
 
 def log_benchmark_metric(scheduler_mode, task_id, model_type, status, execution_time, cost, delay, virtual_budget):
     """
@@ -791,9 +791,9 @@ def log_online_training(state, action, reward, next_state, epsilon):
     csv_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../data/online_training_history.csv"))
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     
-    # 상태 튜플 문자열 변형
-    state_str = f"{state[0]}_{state[1]}_{state[2]}_{state[3]}"
-    next_state_str = f"{next_state[0]}_{next_state[1]}_{next_state[2]}_{next_state[3]}"
+    # 상태 튜플 문자열 변형 (유니파이드 헬퍼 활용)
+    state_str = QLearningAgent.state_to_str(state)
+    next_state_str = QLearningAgent.state_to_str(next_state)
     
     file_exists = os.path.exists(csv_path)
     try:

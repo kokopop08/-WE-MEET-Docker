@@ -81,6 +81,11 @@ class QLearningAgent:
         # Q-테이블 자동 로드
         self.load_q_table()
 
+    @staticmethod
+    def state_to_str(state):
+        """상태 튜플을 Q-Table key용 문자열로 변환하는 공통 정적 메소드입니다."""
+        return "_".join(str(x) for x in state)
+
     def _state_to_str(self, state):
         """
         상태 튜플 (t_profile, w_active, p_spot, b_level)을 Q-Table key용 문자열로 변환합니다.
@@ -91,7 +96,7 @@ class QLearningAgent:
         Returns:
             str: "프로파일_비트맵_요금위험도_예산수준" 형식의 문자열 키.
         """
-        return f"{state[0]}_{state[1]}_{state[2]}_{state[3]}"
+        return self.state_to_str(state)
 
     def get_q_value(self, state, action):
         """
@@ -240,15 +245,45 @@ class QLearningAgent:
         return reward
 
     def save_q_table(self):
-        """학습된 Q-Table 데이터를 로컬 JSON 파일로 영구 보존합니다."""
+        """학습된 Q-Table 데이터를 로컬 JSON 파일로 영구 보존합니다.
+        기존 파일이 있는 경우 머지(Merge)하여 메모리에 없는 상태들의 정보가 유실되지 않도록 보존합니다.
+        또한, 탐험율(Epsilon) 값을 별도의 메타데이터 파일에 영속화합니다.
+        파일 쓰기 중 중단/크래시 시 손상을 막기 위해 임시 파일 생성 후 파일 교체(Atomic Write) 기법을 사용합니다.
+        """
         try:
-            with open(self.q_table_path, 'w', encoding='utf-8') as f:
-                json.dump(self.q_table, f, indent=4)
+            # 1. 기존 파일 로드 및 머지
+            existing_table = {}
+            if os.path.exists(self.q_table_path) and os.path.getsize(self.q_table_path) > 0:
+                try:
+                    with open(self.q_table_path, 'r', encoding='utf-8') as f:
+                        existing_table = json.load(f)
+                except Exception:
+                    existing_table = {}
+            
+            # 2. 메모리 Q-Table 데이터를 문자열 키로 변환하여 병합 (JSON은 키가 문자열이어야 함)
+            for state_str, actions_dict in self.q_table.items():
+                if state_str not in existing_table:
+                    existing_table[state_str] = {}
+                for act, q_val in actions_dict.items():
+                    existing_table[state_str][str(act)] = q_val
+            
+            # 3. 임시 파일에 최종 병합본을 쓰고 원자적으로 덮어쓰기 (Atomic Write)
+            temp_path = self.q_table_path + ".tmp"
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(existing_table, f, indent=4)
+            os.replace(temp_path, self.q_table_path)
+                
+            # 4. 탐험율(Epsilon) 임시 파일 생성 후 원자적 덮어쓰기
+            metadata_path = self.q_table_path.replace(".json", "_metadata.json")
+            temp_meta_path = metadata_path + ".tmp"
+            with open(temp_meta_path, 'w', encoding='utf-8') as f:
+                json.dump({"epsilon": self.epsilon}, f, indent=4)
+            os.replace(temp_meta_path, metadata_path)
         except Exception as e:
             print(f"[Q-Learning Agent] Q-Table 저장 오류: {e}")
 
     def load_q_table(self):
-        """로컬 저장소로부터 기존에 학습되어 저장된 Q-Table을 불러옵니다."""
+        """로컬 저장소로부터 기존에 학습되어 저장된 Q-Table 및 Epsilon 값을 불러옵니다."""
         if os.path.exists(self.q_table_path):
             try:
                 if os.path.getsize(self.q_table_path) == 0:
@@ -265,6 +300,16 @@ class QLearningAgent:
                 self.q_table = {}
                 for state_str, actions_dict in raw_q_table.items():
                     self.q_table[state_str] = {int(a): float(q) for a, q in actions_dict.items()}
+                
+                # Epsilon 값 메타데이터 복구
+                metadata_path = self.q_table_path.replace(".json", "_metadata.json")
+                if os.path.exists(metadata_path):
+                    try:
+                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                            meta = json.load(f)
+                            self.epsilon = meta.get("epsilon", self.epsilon)
+                    except Exception:
+                        pass
                 
                 # Q-Table이 성공적으로 로드된 경우 기학습된 지식을 활용하기 위해 추론 모드일 때만 탐험율을 최소치로 즉시 전환
                 if self.q_table:

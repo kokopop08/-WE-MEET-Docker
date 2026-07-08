@@ -108,8 +108,8 @@ def run_offline_pretraining(episodes=25000):
         # 5. Q-Value 업데이트 및 Epsilon 감쇄
         agent.update_q_value(state, action, reward, next_state, next_available_actions=actions)
         
-        # 6. CSV 로깅용 데이터 수집
-        state_str = f"{state[0]}_{state[1]}_{state[2]}_{state[3]}"
+        # 6. CSV 로깅용 데이터 수집 (유니파이드 헬퍼 활용)
+        state_str = QLearningAgent.state_to_str(state)
         pretrain_logs.append([ep + 1, state_str, action, round(reward, 4), round(agent.epsilon, 6)])
         
     # 7. 완성된 Q-Table 저장
