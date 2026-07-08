@@ -22,25 +22,38 @@ def load_and_summarize(csv_path, mode_name):
         
         # 메트릭 취합
         total_tasks = len(df)
-        success_tasks = len(df[df['status'] == 'SUCCESS'])
+        success_df = df[df['status'] == 'SUCCESS']
+        success_tasks = len(success_df)
         success_rate = (success_tasks / total_tasks) * 100 if total_tasks > 0 else 0
+        failure_rate = 100.0 - success_rate
         
         sla_compliant = len(df[df['delay'] <= 0.0])
         sla_rate = (sla_compliant / total_tasks) * 100 if total_tasks > 0 else 0
         
-        avg_delay = df['delay'].mean()
-        total_cost = df['cost'].sum()
-        avg_exec_time = df['execution_time'].mean()
+        missed_sla_df = df[df['delay'] > 0.0]
+        avg_missed_delay = missed_sla_df['delay'].mean() if len(missed_sla_df) > 0 else 0.0
         
-        print(f"[{mode_name}] 분석 완료 -> 태스크수: {total_tasks}, 성공률: {success_rate:.1f}%, SLA준수율: {sla_rate:.1f}%, 총비용: ${total_cost:.5f}, 평균지연: {avg_delay:.2f}초")
+        total_cost = df['cost'].sum()
+        avg_exec_time = success_df['execution_time'].mean() if success_tasks > 0 else 0
+        
+        # 추가 지표 계산 (처리량 및 건당 비용)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+        duration_seconds = (df['timestamp'].max() - df['timestamp'].min()).total_seconds() if not df['timestamp'].isnull().all() else 0
+        throughput = (success_tasks / duration_seconds) if duration_seconds > 0 else 0
+        cost_per_task = (total_cost / success_tasks) if success_tasks > 0 else 0
+        
+        print(f"[{mode_name}] 분석 완료 -> 처리량: {throughput:.3f} tasks/s, 평균연산: {avg_exec_time:.2f}초, 실패율: {failure_rate:.1f}%, 건당비용: ${cost_per_task:.4f}, SLA: {sla_rate:.1f}%")
         
         return {
             "mode": mode_name,
             "total_tasks": total_tasks,
             "success_rate": success_rate,
+            "failure_rate": failure_rate,
             "sla_rate": sla_rate,
-            "avg_delay": avg_delay,
+            "avg_missed_delay": avg_missed_delay,
+            "throughput": throughput,
             "total_cost": total_cost,
+            "cost_per_task": cost_per_task,
             "avg_exec_time": avg_exec_time,
             "df": df
         }
@@ -69,48 +82,66 @@ def main():
     # 데이터프레임 변환
     summary_df = pd.DataFrame([{k: v for k, v in r.items() if k != 'df'} for r in results])
     
-    # 그래프 시각화 영역 생성 (2x2 Grid)
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle("스케줄러 알고리즘별 성능 비교 벤치마크 (Static vs Dynamic vs Q-Learning)", fontsize=16, fontweight='bold')
+    # 그래프 시각화 영역 생성 (2x3 Grid)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig.suptitle("스케줄러 알고리즘별 종합 성능 지표 벤치마크", fontsize=18, fontweight='bold')
     
     sns.set_theme(style="whitegrid")
     plt.rcParams['font.family'] = 'Malgun Gothic'
     
-    # 1. 평균 지연 시간 비교 (지연이 작을수록 좋음)
-    sns.barplot(x="mode", y="avg_delay", data=summary_df, ax=axes[0, 0], palette="coolwarm")
-    axes[0, 0].set_title("1. 평균 SLA 지연 시간 (초) [↓이 좋음]", fontsize=12, fontweight='bold')
-    axes[0, 0].set_ylabel("평균 지연 시간 (초)")
-    axes[0, 0].set_xlabel("스케줄러 모드")
+    # 1. 시간당 처리량 비교
+    sns.barplot(x="mode", y="throughput", data=summary_df, ax=axes[0, 0], palette="coolwarm")
+    axes[0, 0].set_title("1. 초당 처리량 (Throughput) [↑ 빠를수록 좋음]", fontsize=12, fontweight='bold')
+    axes[0, 0].set_ylabel("Tasks / 초")
+    axes[0, 0].set_xlabel("")
     for p in axes[0, 0].patches:
-        axes[0, 0].annotate(f"{p.get_height():.2f}s", (p.get_x() + p.get_width() / 2., p.get_height()),
+        axes[0, 0].annotate(f"{p.get_height():.3f}", (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='center', xytext=(0, 5), textcoords='offset points')
 
-    # 2. 누적 인프라 비용 비교 (비용이 작을수록 좋음)
-    sns.barplot(x="mode", y="total_cost", data=summary_df, ax=axes[0, 1], palette="viridis")
-    axes[0, 1].set_title("2. 누적 가상 서버 사용 비용 ($) [↓이 좋음]", fontsize=12, fontweight='bold')
-    axes[0, 1].set_ylabel("총 비용 (USD)")
-    axes[0, 1].set_xlabel("스케줄러 모드")
+    # 2. 태스크당 평균 연산 시간
+    sns.barplot(x="mode", y="avg_exec_time", data=summary_df, ax=axes[0, 1], palette="flare")
+    axes[0, 1].set_title("2. 평균 연산 소요 시간 (초) [↓ 짧을수록 좋음]", fontsize=12, fontweight='bold')
+    axes[0, 1].set_ylabel("소요 시간 (초)")
+    axes[0, 1].set_xlabel("")
     for p in axes[0, 1].patches:
-        axes[0, 1].annotate(f"${p.get_height():.5f}", (p.get_x() + p.get_width() / 2., p.get_height()),
+        axes[0, 1].annotate(f"{p.get_height():.2f}s", (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='center', xytext=(0, 5), textcoords='offset points')
 
-    # 3. SLA 데드라인 준수율 비교 (높을수록 좋음)
-    sns.barplot(x="mode", y="sla_rate", data=summary_df, ax=axes[1, 0], palette="crest")
-    axes[1, 0].set_title("3. SLA 데드라인 준수율 (%) [↑이 좋음]", fontsize=12, fontweight='bold')
-    axes[1, 0].set_ylabel("준수율 (%)")
+    # 3. SLA 데드라인 준수율
+    sns.barplot(x="mode", y="sla_rate", data=summary_df, ax=axes[0, 2], palette="crest")
+    axes[0, 2].set_title("3. SLA 데드라인 준수율 (%) [↑ 높을수록 좋음]", fontsize=12, fontweight='bold')
+    axes[0, 2].set_ylabel("준수율 (%)")
+    axes[0, 2].set_xlabel("")
+    axes[0, 2].set_ylim(0, 110)
+    for p in axes[0, 2].patches:
+        axes[0, 2].annotate(f"{p.get_height():.1f}%", (p.get_x() + p.get_width() / 2., p.get_height()),
+                            ha='center', va='center', xytext=(0, 5), textcoords='offset points')
+
+    # 4. 실패율 (장애/회수율)
+    sns.barplot(x="mode", y="failure_rate", data=summary_df, ax=axes[1, 0], palette="rocket")
+    axes[1, 0].set_title("4. 노드 회수/장애 실패율 (%) [낮을수록 안정적]", fontsize=12, fontweight='bold')
+    axes[1, 0].set_ylabel("실패율 (%)")
     axes[1, 0].set_xlabel("스케줄러 모드")
-    axes[1, 0].set_ylim(0, 110)
     for p in axes[1, 0].patches:
         axes[1, 0].annotate(f"{p.get_height():.1f}%", (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='center', xytext=(0, 5), textcoords='offset points')
 
-    # 4. 평균 실행 시간 비교
-    sns.barplot(x="mode", y="avg_exec_time", data=summary_df, ax=axes[1, 1], palette="flare")
-    axes[1, 1].set_title("4. 태스크당 평균 실행 연산 시간 (초)", fontsize=12, fontweight='bold')
-    axes[1, 1].set_ylabel("평균 연산 시간 (초)")
+    # 5. 평균 초과 지연 시간 (SLA 실패한 태스크들만)
+    sns.barplot(x="mode", y="avg_missed_delay", data=summary_df, ax=axes[1, 1], palette="magma")
+    axes[1, 1].set_title("5. SLA 초과시 평균 페널티 지연 (초) [↓ 짧을수록 좋음]", fontsize=12, fontweight='bold')
+    axes[1, 1].set_ylabel("초과 지연 시간 (초)")
     axes[1, 1].set_xlabel("스케줄러 모드")
     for p in axes[1, 1].patches:
         axes[1, 1].annotate(f"{p.get_height():.2f}s", (p.get_x() + p.get_width() / 2., p.get_height()),
+                            ha='center', va='center', xytext=(0, 5), textcoords='offset points')
+
+    # 6. 태스크당 처리 비용
+    sns.barplot(x="mode", y="cost_per_task", data=summary_df, ax=axes[1, 2], palette="viridis")
+    axes[1, 2].set_title("6. 1건당 평균 처리 비용 ($) [↓ 저렴할수록 좋음]", fontsize=12, fontweight='bold')
+    axes[1, 2].set_ylabel("태스크당 비용 (USD)")
+    axes[1, 2].set_xlabel("스케줄러 모드")
+    for p in axes[1, 2].patches:
+        axes[1, 2].annotate(f"${p.get_height():.5f}", (p.get_x() + p.get_width() / 2., p.get_height()),
                             ha='center', va='center', xytext=(0, 5), textcoords='offset points')
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
