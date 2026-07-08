@@ -94,11 +94,21 @@ def _calculate_next_state():
                 break
     if peek_task_next:
         time_left_next = peek_task_next["deadline"] - time.time()
-        if time_left_next <= 30.0:
+        if time_left_next <= 5.0:
             u_sla_next = 1
             
-    b_avail_next = 0 if gcs_state.virtual_budget < 0.7 else 1
-    return (w_mix_next, a_mix_next, u_sla_next, b_avail_next)
+    total_cost_per_hour = 0.0
+    with gcs_state.registry_lock:
+        for info in gcs_state.worker_registry.values():
+            ntype = info.get("node_type", "on_demand").lower()
+            if ntype == "on_demand":
+                total_cost_per_hour += 7.10
+            elif ntype == "spot_a":
+                total_cost_per_hour += 2.20
+            elif ntype == "spot_b":
+                total_cost_per_hour += 0.90
+    c_level_next = 1 if total_cost_per_hour > 9.00 else 0
+    return (w_mix_next, a_mix_next, u_sla_next, c_level_next)
 
 def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
     """
@@ -180,11 +190,21 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         
         if peek_task:
             time_left = peek_task["deadline"] - time.time()
-            if time_left <= 30.0:
+            if time_left <= 5.0:
                 u_sla = 1
 
-        b_avail = 0 if gcs_state.virtual_budget < 0.7 else 1
-        state = (w_mix, a_mix, u_sla, b_avail)
+        total_cost_per_hour = 0.0
+        with gcs_state.registry_lock:
+            for info in gcs_state.worker_registry.values():
+                ntype = info.get("node_type", "on_demand").lower()
+                if ntype == "on_demand":
+                    total_cost_per_hour += 7.10
+                elif ntype == "spot_a":
+                    total_cost_per_hour += 2.20
+                elif ntype == "spot_b":
+                    total_cost_per_hour += 0.90
+        c_level = 1 if total_cost_per_hour > 9.00 else 0
+        state = (w_mix, a_mix, u_sla, c_level)
 
         available_actions = [3]
         
@@ -262,7 +282,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             
             if worker_info:
                 if gcs_state.Q_LEARNING_TRAINING_MODE:
-                    reward = _calculate_immediate_reward(agent, action, target_task, target_type, worker_id, u_sla, b_avail)
+                    reward = _calculate_immediate_reward(agent, action, target_task, target_type, worker_id, u_sla, c_level)
                     next_state = _calculate_next_state()
                     agent.update_q_value(state, action, reward, next_state)
                     agent.save_q_table()
@@ -318,7 +338,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 if scale_success:
                     reward = (4.0 if u_sla == 1 else -1.5) - 3.5
-                    if b_avail == 0:
+                    if c_level == 1:
                         reward -= 3.0
                     else:
                         reward += 3.0
@@ -355,8 +375,10 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 if scale_success:
                     reward = (1.0 if u_sla == 1 else 0.0) - 2.0
-                    if b_avail == 0:
-                        reward += 2.0
+                    if c_level == 1:
+                        reward -= 2.0
+                    else:
+                        reward += 1.0
                 else:
                     # 물리적 자원 부족 또는 OutOfCapacity 가동 실패 시 강력한 페널티 벌점 부과
                     reward = -10.0

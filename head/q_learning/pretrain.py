@@ -40,9 +40,9 @@ def run_offline_pretraining(episodes=25000):
         w_mix = random.choice([1, 2, 3])  # 비어있는 0 상태는 배정할 필요가 없으므로 제외
         a_mix = random.randint(0, 7)
         u_sla = random.choice([0, 1])
-        b_avail = random.choice([0, 1])
+        c_level = random.choice([0, 1])
         
-        state = (w_mix, a_mix, u_sla, b_avail)
+        state = (w_mix, a_mix, u_sla, c_level)
         
         # 2. 에이전트의 액션 선택
         action = agent.choose_action(state, available_actions=actions)
@@ -55,17 +55,17 @@ def run_offline_pretraining(episodes=25000):
         cost_spot_a = agent.nodes_config.get("spot_a", {}).get("cost_per_hour", 0.220)
         cost_spot_b = agent.nodes_config.get("spot_b", {}).get("cost_per_hour", 0.090)
         
-        # 3-1. 예산 가용성 팩터(b_avail)에 따른 보상 제약
-        if b_avail == 0:  # 예산 위기 상황
+        # 3-1. 클러스터 총 비용 수준(c_level)에 따른 보상 제약
+        if c_level == 1:  # 시간당 소모 비용(Burn Rate)이 높은 상황
             if action in [0, 4]:  # 고비용 OD 배정 또는 Spot-A 증설
-                reward -= 3.0  # 요금 초과 페널티 (Spot-A 증설에 대해 리스크 과도 회피를 막기 위해 -5.0에서 -3.0으로 완화)
+                reward -= 3.0  # 고비용 지출 페널티
             elif action in [2, 5]:  # 초저렴 Spot-B 배정 및 증설
-                reward += 2.0  # 알뜰 의사결정 인센티브
+                reward -= 1.0  # 저비용 자원이나 Burn Rate가 높으므로 약한 페널티
             elif action == 3:  # HOLD 보류
-                reward += 1.0  # 가격 지출을 방지했으므로 약간의 보상
-        else:  # 예산 풍족 상황
+                reward += 1.0  # 지출 보류 인센티브
+        else:  # 시간당 소모 비용이 낮은 상황 (c_level == 0)
             if action in [0, 1, 4]:
-                reward += 3.0  # 가속 성능 활용 인센티브 (초반에 Spot-A 및 On-Demand 자원을 활성화하도록 보상 대폭 강화)
+                reward += 3.0  # 적극적인 자원 할당/증설 인센티브
         
         # 3-2. SLA 임박도(u_sla)에 따른 보상 제약
         if u_sla == 1:  # 마감 임박 상황
@@ -102,8 +102,8 @@ def run_offline_pretraining(episodes=25000):
         w_mix_next = random.choice([0, 1, 2, 3])
         a_mix_next = random.randint(0, 7)
         u_sla_next = random.choice([0, 1])
-        b_avail_next = random.choice([0, 1])
-        next_state = (w_mix_next, a_mix_next, u_sla_next, b_avail_next)
+        c_level_next = random.choice([0, 1])
+        next_state = (w_mix_next, a_mix_next, u_sla_next, c_level_next)
         
         # 5. Q-Value 업데이트 및 Epsilon 감쇄
         agent.update_q_value(state, action, reward, next_state, next_available_actions=actions)

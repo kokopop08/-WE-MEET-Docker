@@ -729,11 +729,21 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                         break
             if peek_task_next:
                 time_left_next = peek_task_next["deadline"] - time.time()
-                if time_left_next <= 30.0:
+                if time_left_next <= 5.0:
                     u_sla_next = 1
                     
-            b_avail_next = 0 if gcs_state.virtual_budget < 0.7 else 1
-            next_state = (w_mix_next, a_mix_next, u_sla_next, b_avail_next)
+            total_cost_per_hour = 0.0
+            with gcs_state.registry_lock:
+                for info in gcs_state.worker_registry.values():
+                    ntype = info.get("node_type", "on_demand").lower()
+                    if ntype == "on_demand":
+                        total_cost_per_hour += 7.10
+                    elif ntype == "spot_a":
+                        total_cost_per_hour += 2.20
+                    elif ntype == "spot_b":
+                        total_cost_per_hour += 0.90
+            c_level_next = 1 if total_cost_per_hour > 9.00 else 0
+            next_state = (w_mix_next, a_mix_next, u_sla_next, c_level_next)
             
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 agent.update_q_value(state, action, reward, next_state)

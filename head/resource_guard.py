@@ -29,17 +29,17 @@ def get_gpu_free_memory():
 def is_host_resource_sufficient():
     """
     [Global Host Resource Manager]
-    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(85%)을 검증하여 과부하 방지 안전 여부를 판정합니다.
-
+    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(75% - 16GB 기준)을 검증하여 과부하 방지 안전 여부를 판정합니다.
+ 
     Returns:
-        bool: 호스트 물리 메모리 사용률이 85.0% 이하인 경우 True, 초과한 경우 False.
+        bool: 호스트 물리 메모리 사용률이 75.0% 이하인 경우 True, 초과한 경우 False.
     """
     if os.environ.get("BYPASS_RESOURCE_GUARD", "0") == "1":
         return True
-
-    # [Safety Guard 임계값 85.0% 상한선 선정 이유]
-    # RAM 전체 리소스 32GB 기준 85%를 소모할 시 가용 램 여유는 4.8GB가 됩니다.
-    # 사용자의 4GB 이상 안전 여유 공간 상한선 제약을 준수하고 버벅임 및 VM 다운을 방지하기 위해 85%로 고정했습니다.
+ 
+    # [Safety Guard 임계값 75.0% 상한선 선정 이유]
+    # RAM 전체 리소스 16GB 기준 75%를 소모할 시 가용 램 여유는 4.0GB가 됩니다.
+    # 사용자의 4GB 이상 안전 여유 공간 상한선 제약을 준수하고 버벅임 및 VM 다운을 방지하기 위해 75%로 고정했습니다.
     try:
         mem = psutil.virtual_memory()
         usage_percent = mem.percent
@@ -59,30 +59,18 @@ def is_host_resource_sufficient():
                             usage_percent = max(usage_percent, wsl_usage)
             except Exception:
                 pass
-
-        if usage_percent > 85.0:
-            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 85.0% (Safety Guard)")
+ 
+        if usage_percent > 75.0:
+            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 75.0% (Safety Guard - Assumed 16GB)")
             return False
         return True
     except Exception as e:
         print(f"[Global Resource Guard] 자원 점검 중 예외 발생: {e}")
         return True
-
+ 
 def get_recommended_max_spot_scale():
     """
-    호스트 물리 RAM 용량에 기반하여 안전하게 띄울 수 있는 최대 스팟 스케일(MAX_SPOT_SCALE) 값을 권장/동적 반환합니다.
-    - 24GB 이상(32GB 시스템 등): 8대 허용
-    - 12GB 이상(16GB 시스템 등): 5대 허용
-    - 12GB 미만: 3대 허용
+    16GB RAM 시스템을 상정하여 안전하게 띄울 수 있는 최대 스팟 스케일(MAX_SPOT_SCALE) 값을 반환합니다.
+    - 16GB 시스템 기준: 5대 허용
     """
-    try:
-        mem = psutil.virtual_memory()
-        total_gb = mem.total / (1024.0 ** 3)
-        if total_gb >= 24.0:
-            return 8
-        elif total_gb >= 12.0:
-            return 5
-        else:
-            return 3
-    except Exception:
-        return 5
+    return 5
