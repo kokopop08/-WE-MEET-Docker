@@ -36,17 +36,18 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
         with gcs_state.queue_lock:
             has_lstm = any(t.get("model_type") == "LSTM" for t in gcs_state.task_queue)
             
-        # 평균 리소스 부하가 심각하거나 LSTM 모형이 포함된 경우 고성능 Spot-A를, 그렇지 않으면 Spot-B를 동적 선택
+        # 성능이 우수한 Spot-A의 장점을 살리기 위해, 부하가 높거나(CPU > 75%, MEM > 70%) 무거운 LSTM 작업이 있는 경우
+        # 고성능 Spot-A를 선택하고, 그렇지 않은 평시/경량 상황에서만 가성비 Spot-B를 동적 선택하도록 원래의 성능 규칙 복원
         target_type = "spot_a" if (avg_cpu > 75.0 or avg_mem > 70.0 or has_lstm) else "spot_b"
             
-        # 대기 큐에 작업이 3개 이상 밀렸거나 평균 리소스 부하가 높을 시 스케일아웃
+        # 대기 큐에 작업이 4개 이상 밀렸거나 평균 리소스 부하가 높을 시 스케일아웃 (정적 임계값 조절)
         if q_len_real >= 8 and spot_scale < MAX_SPOT_SCALE - 1:
             dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-{target_type[-1].upper()} 노드 2대 동시 증설")
             if cluster_manager.scale_out_worker(target_type):
                 spot_scale += 1
             if cluster_manager.scale_out_worker(target_type):
                 spot_scale += 1
-        elif ((avg_cpu > 70.0 or avg_mem > 70.0) or q_len_real >= 3) and spot_scale < MAX_SPOT_SCALE:
+        elif ((avg_cpu > 80.0 or avg_mem > 80.0) or q_len_real >= 4) and spot_scale < MAX_SPOT_SCALE:
             dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 적체({q_len_real}개) 또는 고부하 감지 -> Spot-{target_type[-1].upper()} 노드 1대 증설")
             if cluster_manager.scale_out_worker(target_type):
                 spot_scale += 1
@@ -84,8 +85,8 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
                     cpu_val = info.get("cpu", 0.0)
                     mem_val = info.get("mem", 0.0)
                     
-                    # 간섭 회피: CPU가 80%를 넘거나 Memory가 75%를 넘은 임계 과부하 상태 노드는 할당 원천 배제
-                    if cpu_val >= 80.0 or mem_val >= 75.0:
+                    # 간섭 회피: CPU가 92%를 넘거나 Memory가 88%를 넘은 임계 과부하 상태 노드는 할당 원천 배제
+                    if cpu_val >= 92.0 or mem_val >= 88.0:
                         continue
                     candidate_workers.append((wid, info, cpu_val * 0.5 + mem_val * 0.5))
                     

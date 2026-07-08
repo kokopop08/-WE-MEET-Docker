@@ -259,7 +259,7 @@ class SimulatedCluster:
                     self.worker_2_scale += 2
                     self.worker_2_status.extend(["IDLE", "IDLE"])
                     self.worker_2_load.extend([10.0, 10.0])
-                elif (avg_load > 70.0 or q_len >= 3) and self.worker_2_scale < 3:
+                elif (avg_load > 80.0 or q_len >= 4) and self.worker_2_scale < 3:
                     self.worker_2_scale += 1
                     self.worker_2_status.append("IDLE")
                     self.worker_2_load.append(10.0)
@@ -284,10 +284,10 @@ class SimulatedCluster:
                         
                     # 가용한 워커 목록 및 부하 계산
                     idle_workers = []
-                    if self.worker_1_status == "IDLE" and self.worker_1_load < 80.0:
+                    if self.worker_1_status == "IDLE" and self.worker_1_load < 92.0:
                         idle_workers.append(("worker-1", self.worker_1_load))
                     for i in range(self.worker_2_scale):
-                        if self.worker_2_status[i] == "IDLE" and self.worker_2_load[i] < 80.0:
+                        if self.worker_2_status[i] == "IDLE" and self.worker_2_load[i] < 92.0:
                             idle_workers.append((f"worker-2-{i+1}", self.worker_2_load[i]))
                             
                     if idle_workers:
@@ -301,12 +301,12 @@ class SimulatedCluster:
                         self.running_tasks[target_worker] = {"task": task, "remaining_time": exec_time, "exec_time": exec_time}
                         
                         if target_worker == "worker-1":
-                            self.worker_1_status = "BUSY"
-                            self.worker_1_load = 75.0
+                             self.worker_1_status = "BUSY"
+                             self.worker_1_load = 75.0
                         else:
-                            idx = int(target_worker.split("-")[-1]) - 1
-                            self.worker_2_status[idx] = "BUSY"
-                            self.worker_2_load[idx] = 75.0
+                             idx = int(target_worker.split("-")[-1]) - 1
+                             self.worker_2_status[idx] = "BUSY"
+                             self.worker_2_load[idx] = 75.0
                     else:
                         # 간섭 회피를 위한 지연 배정 (Staggered)
                         self.task_queue.insert(0, task)
