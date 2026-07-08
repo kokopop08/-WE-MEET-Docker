@@ -25,7 +25,7 @@
     *   Heartbeat 3초 미수신 시 DEAD 판정 ➔ GCS의 Task Lineage DAG 분석 ➔ 의존 하위 태스크 식별 ➔ 최신 체크포인트부터 학습 재개 및 Auto Scale-out 연동.
 *   **고가용성 및 클러스터 안전 가드 장치 (Fault-Tolerance & Guard Systems)**:
     *   **비동기 좀비 컨테이너 클리너 (Async GCS Cleaner)**: Head Node 초기 구동 시, 호스트에 잔존하던 과거의 비정상 종료 Spot 컨테이너 잔해를 검출하여 **비동기 데몬 스레드로 백그라운드 소거**. gRPC 소켓 바인딩 및 서비스 시작을 차단하던 구버전 삭제 딜레이(3초 블로킹 병목)를 해결.
-    *   **호스트 물리 메모리 Guard (Host Memory Guard)**: 스케일아웃 기동 시 `psutil.virtual_memory().percent`로 호스트 물리 메모리 사용률을 측정하여 **사용률이 75.0%를 초과**하면 추가 컨테이너 배포를 거부·보류하여 호스트 OS의 OOM 붕괴를 방지합니다. WSL2 환경에서는 컨테이너 내부 `free -b` 측정치와 비교하여 더 큰 사용률을 채택(보수적 판정)합니다. 환경변수 `BYPASS_RESOURCE_GUARD=1` 설정 시 이 가드를 단락(short-circuit) 우회합니다. (`head/cluster_manager.py:is_host_resource_sufficient`)
+    *   **호스트 물리 메모리 Guard (Host Memory Guard)**: 스케일아웃 기동 시 `psutil.virtual_memory().percent`로 호스트 물리 메모리 사용률을 측정하여 **사용률이 85.0%를 초과**하면 추가 컨테이너 배포를 거부·보류하여 호스트 OS의 OOM 붕괴를 방지합니다. WSL2 환경에서는 컨테이너 내부 `free -b` 측정치와 비교하여 더 큰 사용률을 채택(보수적 판정)합니다. 환경변수 `BYPASS_RESOURCE_GUARD=1` 설정 시 이 가드를 단락(short-circuit) 우회합니다. (`head/cluster_manager.py:is_host_resource_sufficient`)
     *   **가용 GPU VRAM Guard (VRAM Guard)**: `nvidia-smi --query-gpu=memory.free`로 가용 GPU 메모리를 조회하여 **500 MiB 미만**일 때 스케일아웃을 긴급 차단하여 VRAM 고갈에 따른 CUDA 연산 크래시를 차단합니다.
     *   **작업 분배 롤백 방어 (Task Rollback Guard)**: 다중 배정(Multi-Dispatch) 과정에서 경합 조건 등으로 인해 특정 워커로의 태스크 바인딩 및 연산 위임에 실패할 경우, 작업을 삭제하지 않고 GCS 대기열의 맨 앞(`insert(0, task)`)으로 즉각 안전하게 회수 및 롤백.
 

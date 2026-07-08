@@ -29,17 +29,16 @@ def get_gpu_free_memory():
 def is_host_resource_sufficient():
     """
     [Global Host Resource Manager]
-    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(75% - 16GB 기준)을 검증하여 과부하 방지 안전 여부를 판정합니다.
+    호스트 시스템의 실시간 물리 메모리 사용률(%)의 임계 상한선(85%)을 검증하여 과부하 방지 안전 여부를 판정합니다.
  
     Returns:
-        bool: 호스트 물리 메모리 사용률이 75.0% 이하인 경우 True, 초과한 경우 False.
+        bool: 호스트 물리 메모리 사용률이 85.0% 이하인 경우 True, 초과한 경우 False.
     """
     if os.environ.get("BYPASS_RESOURCE_GUARD", "0") == "1":
         return True
  
-    # [Safety Guard 임계값 75.0% 상한선 선정 이유]
-    # RAM 전체 리소스 16GB 기준 75%를 소모할 시 가용 램 여유는 4.0GB가 됩니다.
-    # 사용자의 4GB 이상 안전 여유 공간 상한선 제약을 준수하고 버벅임 및 VM 다운을 방지하기 위해 75%로 고정했습니다.
+    # [Safety Guard 임계값 85.0% 상한선 선정 이유]
+    # RAM 전체 리소스 기준 85%를 소모할 시 가용 램 여유는 시스템 다운 및 VM 중단을 방지하기 위한 최소 안전 마진이 됩니다.
     try:
         mem = psutil.virtual_memory()
         usage_percent = mem.percent
@@ -60,8 +59,8 @@ def is_host_resource_sufficient():
             except Exception:
                 pass
  
-        if usage_percent > 75.0:
-            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 75.0% (Safety Guard - Assumed 16GB)")
+        if usage_percent > 85.0:
+            print(f"[Global Resource Guard] 호스트 물리 메모리 사용률 상한선 초과 경고: {usage_percent:.1f}% > 85.0% (Safety Guard)")
             return False
         return True
     except Exception as e:
