@@ -72,6 +72,12 @@ class QLearningAgent:
         self.SUCCESS_REWARD = 10.0
         self.COST_WEIGHT = 1000.0   # 시간 환산 비용이 매우 작으므로 감점 체감을 위해 2.0에서 1000.0으로 대폭 상향
         self.DELAY_PENALTY_WEIGHT = 5.0
+        # 회수(Eviction)로 태스크가 죽었을 때 부과하는 강한 페널티. 성공 보상(+10)을 크게 상회하여
+        # "느린 노드에 무거운 작업을 넣으면 회수 룰렛에 여러 번 노출되어 죽는다"를 학습하게 만든다.
+        self.EVICTION_PENALTY = 20.0
+        # makespan(체류/실행 시간) 상시 감점 가중치. 데드라인 초과 여부와 무관하게 '느림' 자체에 대가를 부과하여
+        # "싸지만 느린" Spot-B가 공짜로 보이는 편향을 제거한다.
+        self.MAKESPAN_WEIGHT = 0.5
 
         # 행동 정의 (Action Space) - 6대 행동 확장
         # 0: ASSIGN_OD (On-demand 배정), 1: ASSIGN_SPOT_A (Spot-A 배정), 2: ASSIGN_SPOT_B (Spot-B 배정)
@@ -193,41 +199,51 @@ class QLearningAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon = max(self.epsilon_min, self.epsilon * self.decay_rate)
 
-    def calculate_reward(self, success, execution_time, worker_type, delay_time, deadline_exceeded, current_model=None, co_scheduled_models=None):
+    def calculate_reward(self, success, execution_time, worker_type, delay_time, deadline_exceeded, current_model=None, co_scheduled_models=None, evicted=False):
         """
         보상 함수(Reward Function) 수식 모델 구현.
 
         Args:
             success (bool): 태스크 실행 성공 완료 여부.
-            execution_time (float): 실제 연산 수행 소요 시간.
-            worker_type (str): 연산에 사용된 워커 타입 ("on_demand" / "spot_a").
+            execution_time (float): 실제 연산 수행 소요 시간(회수 실패 시 낭비된 시간).
+            worker_type (str): 연산에 사용된 워커 타입 ("on_demand" / "spot_a" / "spot_b").
             delay_time (float): SLA 마감 기한 초과 지연 시간.
             deadline_exceeded (bool): SLA 데드라인 초과 여부.
             current_model (str, optional): 현재 배치된 모델명.
             co_scheduled_models (list, optional): 함께 배치된 모델명 리스트.
+            evicted (bool): 스팟 강제 회수(Eviction)로 인해 실패했는지 여부.
 
         Returns:
             float: 산출된 보상(Reward) 스칼라 값.
         """
         reward = 0.0
-        
+
         # 1. SLA 완료 보너스
         if success:
             reward += self.SUCCESS_REWARD
-            
+
         # 2. 실행 비용 감점 (Cost_run = Cost_worker * Time_execution)
         # 시간당 요금 모델을 초 단위로 환산하여 감산 적용
         cost_profile = self.nodes_config.get(worker_type, {})
         cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
         execution_cost = cost_per_hour * (execution_time / 3600.0)
-        
+
         # 비용 가중치를 곱하여 보상에서 차감 (예산 절약 유도)
         reward -= self.COST_WEIGHT * execution_cost
-        
+
+        # 2-1. makespan 상시 감점: 데드라인 초과 여부와 무관하게 '느림' 자체에 대가를 부과한다.
+        #      → 싸지만 느린 Spot-B가 비용 항에서만 이득을 보던 편향을 상쇄.
+        reward -= self.MAKESPAN_WEIGHT * execution_time
+
         # 3. 지연 페널티 (SLA 마감 기한 초과 시 초당 페널티 감점)
         if deadline_exceeded:
             reward -= self.DELAY_PENALTY_WEIGHT * delay_time
-            
+
+        # 3-1. 회수(Eviction) 페널티: 스팟 강제 회수로 태스크가 죽으면 강한 벌점.
+        #      성공 보상(+10)을 상회하여, 회수 위험이 큰 배치(느린 노드×위험구간)를 학습으로 회피하게 한다.
+        if evicted:
+            reward -= self.EVICTION_PENALTY
+
         # 4. 이종 모형 융합 배치 (Co-scheduling) 조화도에 따른 보상/페널티 추가 (자율 융합 유도)
         if current_model and co_scheduled_models:
             is_current_mem_bound = current_model.upper() in ["RNN", "LSTM"]

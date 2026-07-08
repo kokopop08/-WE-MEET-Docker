@@ -29,7 +29,10 @@ task_lineage = {}
 """dict: 태스크 의존성 계보 및 할당 워커 매핑 관리 레포지토리."""
 
 # 전역 가상 자산 관리 변수
-virtual_budget = 10.0  # 초기 예산 $10.0달러 (현실적인 AWS 요율과 밸런싱을 맞추기 위해 10.0달러로 조정)
+# 버스트 벤치마크 시나리오(명세서 Scenario 1)에서 예산 축이 실제로 물게 하려는 시나리오 파라미터.
+# 짧은 런에서도 자원을 남발하는 Static이 조기 파산하도록 초기 예산을 낮게 설정한다. (튜닝 포인트)
+INITIAL_VIRTUAL_BUDGET = 1.5
+virtual_budget = INITIAL_VIRTUAL_BUDGET  # 초기 예산 ($)
 """float: 현재 사용 가능한 가상 잔여 예산 ($)."""
 
 task_counter = 0        # 고유한 TASK ID 생성을 위한 카운터 변수

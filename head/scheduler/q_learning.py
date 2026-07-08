@@ -7,108 +7,13 @@ import threading
 import head.state as gcs_state
 import head.cluster_manager as cluster_manager
 import head.dashboard.server as dashboard
-
-def _calculate_immediate_reward(agent, action, target_task, worker_type, worker_id, u_sla, b_avail):
-    # 1. 예상 수행 시간 계산 (에포크당 모델별 기준치)
-    epochs = target_task.get("epochs", 15)
-    model_type = target_task.get("model_type", "CNN").upper()
-    
-    epoch_times = {
-        "CNN": 0.22,
-        "RNN": 0.10,
-        "LSTM": 0.10
-    }
-    base_epoch_time = epoch_times.get(model_type, 0.10)
-    
-    # gpu_scale_factor 로드
-    cost_profile = agent.nodes_config.get(worker_type, {})
-    gpu_scale = cost_profile.get("gpu_scale_factor", 1.0)
-    
-    expected_execution_time = (epochs * base_epoch_time) / gpu_scale
-    
-    # 2. 예상 비용 계산
-    cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
-    expected_cost = cost_per_hour * (expected_execution_time / 3600.0)
-    
-    # 3. 상대 지연 시간 및 페널티 계산 (On-demand 대비 추가 지연만 페널티로 부과)
-    if u_sla == 1:
-        expected_execution_time_od = (epochs * base_epoch_time) / 1.0
-        relative_delay = max(0.0, expected_execution_time - expected_execution_time_od)
-    else:
-        relative_delay = 0.0
-        
-    delay_penalty = agent.DELAY_PENALTY_WEIGHT * relative_delay
-    
-    # Co-scheduling 분석
-    co_scheduled = []
-    with gcs_state.registry_lock:
-        for sub_id, l_info in gcs_state.task_lineage.items():
-            if l_info.get("worker_id") == worker_id and l_info.get("status") == "RUNNING":
-                co_scheduled.append(l_info.get("model_type", ""))
-                
-    # agent.calculate_reward 활용
-    reward = agent.calculate_reward(
-        success=True,
-        execution_time=expected_execution_time,
-        worker_type=worker_type,
-        delay_time=relative_delay,
-        deadline_exceeded=(relative_delay > 0.0),
-        current_model=model_type,
-        co_scheduled_models=co_scheduled
-    )
-    return reward
+import head.q_learning.state_features as state_features
 
 
 def _calculate_next_state():
-    with gcs_state.queue_lock:
-        q_len_next = len(gcs_state.task_queue)
-        cnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") == "CNN")
-        lstm_rnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") in ["LSTM", "RNN"])
-        
-    if q_len_next == 0:
-        w_mix_next = 0
-    elif cnn_count > 0 and lstm_rnn_count == 0:
-        w_mix_next = 1
-    elif lstm_rnn_count > 0 and cnn_count == 0:
-        w_mix_next = 2
-    else:
-        w_mix_next = 3
-        
-    with gcs_state.registry_lock:
-        w1_idle = 1 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-        w2_idle = 1 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-        w3_idle = 1 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-    a_mix_next = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
-    
-    u_sla_next = 0
-    peek_task_next = None
-    with gcs_state.queue_lock:
-        for t in gcs_state.task_queue:
-            deps_met = True
-            for dep in t.get("dependencies", []):
-                if not gcs_state.completed_tasks_cache.get(dep, False):
-                    deps_met = False
-                    break
-            if deps_met:
-                peek_task_next = t
-                break
-    if peek_task_next:
-        time_left_next = peek_task_next["deadline"] - time.time()
-        if time_left_next <= 5.0:
-            u_sla_next = 1
-            
-    total_cost_per_hour = 0.0
-    with gcs_state.registry_lock:
-        for info in gcs_state.worker_registry.values():
-            ntype = info.get("node_type", "on_demand").lower()
-            if ntype == "on_demand":
-                total_cost_per_hour += 7.10
-            elif ntype == "spot_a":
-                total_cost_per_hour += 2.20
-            elif ntype == "spot_b":
-                total_cost_per_hour += 0.90
-    c_level_next = 1 if total_cost_per_hour > 9.00 else 0
-    return (w_mix_next, a_mix_next, u_sla_next, c_level_next)
+    """다음 상태(next_state)를 단일 상태 함수로 위임하여 산출한다 (인코딩 드리프트 방지)."""
+    state, _ = state_features.compute_current_state(gcs_state)
+    return state
 
 def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
     """
@@ -154,57 +59,15 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         if q_len_real == 0:
             break
             
-        w_mix = 0
-        cnn_count = 0
-        lstm_rnn_count = 0
-        with gcs_state.queue_lock:
-            cnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") == "CNN")
-            lstm_rnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") in ["LSTM", "RNN"])
-        if q_len_real == 0:
-            w_mix = 0
-        elif cnn_count > 0 and lstm_rnn_count == 0:
-            w_mix = 1
-        elif lstm_rnn_count > 0 and cnn_count == 0:
-            w_mix = 2
-        else:
-            w_mix = 3
-
-        with gcs_state.registry_lock:
-            w1_idle = 1 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-            w2_idle = 1 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-            w3_idle = 1 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-        a_mix = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
-            
-        u_sla = 0
-        peek_task = None
-        with gcs_state.queue_lock:
-            for task in gcs_state.task_queue:
-                deps_met = True
-                for dep in task.get("dependencies", []):
-                    if not gcs_state.completed_tasks_cache.get(dep, False):
-                        deps_met = False
-                        break
-                if deps_met:
-                    peek_task = task
-                    break
-        
-        if peek_task:
-            time_left = peek_task["deadline"] - time.time()
-            if time_left <= 5.0:
-                u_sla = 1
-
-        total_cost_per_hour = 0.0
-        with gcs_state.registry_lock:
-            for info in gcs_state.worker_registry.values():
-                ntype = info.get("node_type", "on_demand").lower()
-                if ntype == "on_demand":
-                    total_cost_per_hour += 7.10
-                elif ntype == "spot_a":
-                    total_cost_per_hour += 2.20
-                elif ntype == "spot_b":
-                    total_cost_per_hour += 0.90
-        c_level = 1 if total_cost_per_hour > 9.00 else 0
-        state = (w_mix, a_mix, u_sla, c_level)
+        # 상태 특징 산출을 단일 함수로 위임 (스케줄러/완료피드백/시뮬레이터 인코딩 통일)
+        state, ctx = state_features.compute_current_state(gcs_state)
+        w1_idle = 1 if ctx["idle_od"] else 0
+        w2_idle = 1 if ctx["idle_spot_a"] else 0
+        w3_idle = 1 if ctx["idle_spot_b"] else 0
+        peek_task = ctx["peek_task"]
+        urgent = ctx["sla_bucket"] >= 2      # 마감 임박(<=10s) 여부
+        u_sla = 1 if urgent else 0           # HOLD/SCALE 결정시점 보상 휴리스틱 호환용
+        c_level = ctx["cost_level"]          # 고비용 국면(총요금>$9) 호환용
 
         available_actions = [3]
         
@@ -281,18 +144,12 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                         break
             
             if worker_info:
-                if gcs_state.Q_LEARNING_TRAINING_MODE:
-                    reward = _calculate_immediate_reward(agent, action, target_task, target_type, worker_id, u_sla, c_level)
-                    next_state = _calculate_next_state()
-                    agent.update_q_value(state, action, reward, next_state)
-                    agent.save_q_table()
-                    from head.scheduler.task_executor import log_online_training
-                    log_online_training(state, action, reward, next_state, agent.epsilon)
-                    dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (ASSIGN) | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
-                
+                # ASSIGN 액션의 학습은 '배정 시점의 낙관적 보상'이 아니라, 태스크가 실제로 완료되거나
+                # 회수(Eviction)/OOM으로 실패했을 때 run_task_on_worker의 완료 피드백에서 수행한다.
+                # (state, action)을 실행 스레드로 전달해야 지연 보상 경로가 활성화되어 회수 페널티가 Q값에 반영된다.
                 threading.Thread(
                     target=run_task_on_worker,
-                    args=(worker_id, worker_info, target_task, None, None),
+                    args=(worker_id, worker_info, target_task, state, action),
                     daemon=True
                 ).start()
             else:

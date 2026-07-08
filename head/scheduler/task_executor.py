@@ -19,6 +19,8 @@ import head.dashboard.server as dashboard
 from proto import babyray_pb2
 from proto import babyray_pb2_grpc
 from head.q_learning.agent import QLearningAgent
+import head.q_learning.state_features as state_features
+from common.failure_simulator import FailureSimulator
 
 # [Q-Learning Agent 싱글톤 인스턴스 모듈화]
 # - scheduler.py와 scheduler/core.py가 각각 생성하던 에이전트를 공통 유틸로 통합하여 
@@ -130,7 +132,22 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
     try:
         model_type = task["model_type"]
         epochs = task["epochs"]
-        
+
+        # --- 자원경합 기반 OOM 해저드 사전 판정 (head 측: 노드 용량·동거 압력이 관측되는 지점) ---
+        # 실제 호스트 메모리를 물리적으로 키우지 않고, 노드 용량(spot_b 512MB 등) 대비 메모리바운드 모형의
+        # 적합도와 동거 압력을 확률로 모사한다. 자원을 안 보고 작은 노드에 큰 모형을 얹는 스케줄러가 처벌받는다.
+        co_membound = 0
+        with gcs_state.registry_lock:
+            for _sid, _linfo in gcs_state.task_lineage.items():
+                if _linfo.get("worker_id") == worker_id and _linfo.get("status") == "RUNNING":
+                    if str(_linfo.get("model_type", "")).upper() in ("RNN", "LSTM"):
+                        co_membound += 1
+        if FailureSimulator.check_oom(model_type, task_id, worker_info.get("node_type"), co_membound):
+            dashboard.log_event(f"[Resource OOM] {task_id}: {worker_info.get('node_type')} 노드 메모리 경합 OOM 판정(동거 메모리바운드 {co_membound}개) -> 실패 처리 및 재큐잉")
+            success = False
+            execution_time = 0.0
+            return  # finally 블록에서 완료 피드백(보상)·재삽입 로직을 그대로 수행
+
         # 현재 GCS에 등록된 가용 IDLE 워커 리스트 스캔
         with gcs_state.registry_lock:
             available_idle_workers = [
@@ -653,10 +670,15 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             pass
             
         # GCS 워커 노드 상태 복구
+        was_evicted = False
         with gcs_state.registry_lock:
             if worker_id in gcs_state.worker_registry:
                 gcs_state.worker_registry[worker_id]["status"] = "IDLE"
-            
+            elif not success:
+                # 완료 시점에 워커가 레지스트리에서 사라졌다면 회수 데몬(cluster_manager)이 삭제한 것 →
+                # 스팟 강제 회수(Eviction)로 인한 실패로 판정. (OOM/일반 실패는 워커가 그대로 남아 있음)
+                was_evicted = True
+
             # GCS 전역 작업 상태 정보 업데이트 및 상태 영속 파일로 저장
             if success:
                 gcs_state.completed_tasks_cache[task_id] = True
@@ -664,6 +686,8 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
             else:
                 gcs_state.task_status[task_id] = "FAILED"
         gcs_state.save_gcs_state()
+        if was_evicted:
+            dashboard.log_event(f"[Scheduler Feedback] 작업 {task_id}: 스팟 회수(Eviction)로 인한 실패 판정 -> 강화학습 회수 페널티 부과")
                 
         # --- Q-Learning 보상 산출 및 Q-Table 업데이트 피드백 단계 ---
         end_time = time.time()
@@ -692,58 +716,12 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                 delay_time=delay_time,
                 deadline_exceeded=deadline_exceeded,
                 current_model=model_type,
-                co_scheduled_models=co_scheduled
+                co_scheduled_models=co_scheduled,
+                evicted=was_evicted
             )
-            
-            # 다음 상태(Next State) 산출 리팩토링
-            with gcs_state.queue_lock:
-                cnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") == "CNN")
-                lstm_rnn_count = sum(1 for t in gcs_state.task_queue if t.get("model_type") in ["LSTM", "RNN"])
-                q_len_next = len(gcs_state.task_queue)
-            if q_len_next == 0:
-                w_mix_next = 0
-            elif cnn_count > 0 and lstm_rnn_count == 0:
-                w_mix_next = 1
-            elif lstm_rnn_count > 0 and cnn_count == 0:
-                w_mix_next = 2
-            else:
-                w_mix_next = 3
-                
-            with gcs_state.registry_lock:
-                w1_idle = 1 if any(info["node_type"] == "on_demand" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-                w2_idle = 1 if any(info["node_type"] == "spot_a" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-                w3_idle = 1 if any(info["node_type"] == "spot_b" and info["status"] == "IDLE" for info in gcs_state.worker_registry.values()) else 0
-            a_mix_next = (w1_idle * 1) + (w2_idle * 2) + (w3_idle * 4)
-            
-            u_sla_next = 0
-            peek_task_next = None
-            with gcs_state.queue_lock:
-                for t in gcs_state.task_queue:
-                    deps_met = True
-                    for dep in t.get("dependencies", []):
-                        if not gcs_state.completed_tasks_cache.get(dep, False):
-                            deps_met = False
-                            break
-                    if deps_met:
-                        peek_task_next = t
-                        break
-            if peek_task_next:
-                time_left_next = peek_task_next["deadline"] - time.time()
-                if time_left_next <= 5.0:
-                    u_sla_next = 1
-                    
-            total_cost_per_hour = 0.0
-            with gcs_state.registry_lock:
-                for info in gcs_state.worker_registry.values():
-                    ntype = info.get("node_type", "on_demand").lower()
-                    if ntype == "on_demand":
-                        total_cost_per_hour += 7.10
-                    elif ntype == "spot_a":
-                        total_cost_per_hour += 2.20
-                    elif ntype == "spot_b":
-                        total_cost_per_hour += 0.90
-            c_level_next = 1 if total_cost_per_hour > 9.00 else 0
-            next_state = (w_mix_next, a_mix_next, u_sla_next, c_level_next)
+
+            # 다음 상태(Next State)도 단일 상태 함수로 위임하여 산출 (인코딩 드리프트 방지)
+            next_state, _ = state_features.compute_current_state(gcs_state)
             
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 agent.update_q_value(state, action, reward, next_state)

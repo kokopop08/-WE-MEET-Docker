@@ -381,8 +381,9 @@ def start_spot_eviction_loop():
                 except Exception:
                     pass
 
-            p_spot = 1 if (time.time() % 30.0) < 10.0 else 0
-            
+            # 위험구간 판정은 FailureSimulator의 공유 헬퍼로 일원화 (스케줄러와 동일 값 관측 보장)
+            p_spot = FailureSimulator.current_danger_phase()
+
             spot_workers = []
             with state.registry_lock:
                 for wid, info in state.worker_registry.items():
@@ -393,7 +394,8 @@ def start_spot_eviction_loop():
                 continue
                 
             for wid, n_type in spot_workers:
-                eviction_prob = FailureSimulator.EVICTION_BASE_PROB.get(n_type, 0.3) if p_spot == 1 else (FailureSimulator.EVICTION_BASE_PROB.get(n_type, 0.3) * FailureSimulator.EVICTION_IDLE_FACTOR)
+                # 로그에 찍는 확률과 실제 판정 확률을 동일한 함수(eviction_probability)로 산출해 불일치 제거
+                eviction_prob = FailureSimulator.eviction_probability(n_type, p_spot, preemption_probs)
                 if FailureSimulator.check_eviction(n_type, p_spot, preemption_probs):
                     container_ref = f"babyray-{wid}"
                     dashboard.log_event(f"[Eviction Daemon] !!! 스팟 강제 회수(Eviction) 발생 !!! -> 대상: {wid} (확률: {eviction_prob*100:.1f}%)")

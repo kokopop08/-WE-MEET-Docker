@@ -91,7 +91,7 @@ class DashboardHTTPHandler(http.server.BaseHTTPRequestHandler):
                     state.task_status.clear()
                     state.completed_tasks_cache.clear()
                     state.latest_conclusions.clear()
-                    state.virtual_budget = 10.0
+                    state.virtual_budget = state.INITIAL_VIRTUAL_BUDGET
                     state.task_counter = 0
                     
             state.save_gcs_state()

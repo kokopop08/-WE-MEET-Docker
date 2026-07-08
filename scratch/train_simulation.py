@@ -1,273 +1,288 @@
 # ==============================================================================
 # WE-MEET: Q-Learning 오프라인 시뮬레이션 학습기 (scratch/train_simulation.py)
+#
+# [세계 통일 원칙]
+# 이 시뮬레이터는 실제 docker 경로(head/)의 물리를 '미러링'한다. 즉,
+#   - 노드 3종(on_demand / spot_a / spot_b)과 성능계수(gpu_scale) · 요금(cost_per_hour)
+#   - 노출시간 기반 스팟 회수(Eviction): 10초 주기 폴링 + 30초 위험구간 사이클
+#   - 자원경합 기반 OOM(FailureSimulator.check_oom)
+#   - 6대 행동(0~5)과 head/q_learning/state_features.compute_state()의 동일한 6-튜플 상태
+#   - ASSIGN 액션의 지연 보상(태스크가 실제 완료/회수될 때 그 배정 (state,action)에 보상 귀속)
+# 을 그대로 재현하여, 학습된 Q-테이블이 추론(docker)에서 그대로 통하도록 한다.
 # ==============================================================================
 
 import os
 import sys
 import random
-import time
-import json
 
-# 프로젝트 루트 디렉토리를 path에 추가하여 head 패키지 임포트 지원
+# 프로젝트 루트 디렉토리를 path에 추가하여 head/common 패키지 임포트 지원
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from head.q_learning.agent import QLearningAgent
+import head.q_learning.state_features as state_features
+from common.failure_simulator import FailureSimulator
+
+DT = 1.0                                   # 1틱 = 1 시뮬레이션 초 (실제 회수 폴링 10초와 동일 축척)
+EVICTION_POLL_SEC = 10.0                   # 실제 eviction_loop 폴링 주기와 동일
+EPOCH_TIMES = {"CNN": 0.22, "RNN": 0.10, "LSTM": 0.10}
+MAX_SPOT_SCALE = 6
+MODEL_TYPES = ["CNN", "RNN", "LSTM"]
+
 
 class SimulatedEnvironment:
-    """
-    큐 길이, 활성 노드 수, 잔여 예산을 포함하는 마스터 노드 스케줄링 환경의
-    상태 전이 및 태스크 수명 주기를 의사 수학적으로 모사하는 학습용 시뮬레이션 환경.
-    """
+    """실제 docker 스케줄링 세계를 미러링하는 학습용 시뮬레이션 환경."""
+
     def __init__(self, cost_model_path=None):
         self.agent = QLearningAgent(cost_model_path=cost_model_path)
+        self.cfg = self.agent.nodes_config
         self.reset()
 
+    # ---------------------------------------------------------------- 환경 초기화
     def reset(self):
-        """환경 상태를 초기화합니다."""
-        self.virtual_budget = 100.0
-        self.task_queue = []
+        self.sim_time = 0.0
+        self.next_evict_time = EVICTION_POLL_SEC
+        # 예산 축의 모든 국면(위험/낮음/여유)을 학습에서 겪도록 에피소드마다 초기 예산을 무작위화
+        self.virtual_budget = random.uniform(1.0, 4.0)
         self.task_counter = 0
-        
-        # 활성 워커 상태 모사
-        # OD(worker-1)는 항상 1대 활성, Spot-A는 0~3대 동적 스케일링
-        self.worker_1_status = "IDLE"  # On-demand
-        self.worker_2_scale = 0       # Spot-A 대수
-        self.worker_2_status = []     # 각 Spot-A 워커의 상태 ["IDLE", "BUSY", ...]
-        
-        # 가상 진행 중인 태스크들 {worker_name: {"task": task_dict, "remaining_time": float}}
-        self.running_tasks = {}
-        
-        # 초기 태스크 적재 (5~8개 생성)
+        self.task_queue = []
+
+        # 워커: worker-1(OD) 상시 1대, spot_a/spot_b는 0대에서 동적 증설
+        self.workers = {
+            "worker-1": {"type": "on_demand", "status": "IDLE", "task": None,
+                         "remaining": 0.0, "exec_time": 0.0, "s": None, "a": None},
+        }
+        self.spot_seq = 0
+
         for _ in range(random.randint(5, 8)):
             self._generate_task()
-            
         return self._get_state()
 
     def _generate_task(self):
         self.task_counter += 1
-        model = random.choice(["CNN", "RNN", "LSTM"])
-        epochs = random.randint(5, 10)
-        timeout = random.randint(25, 45)
+        model = random.choice(MODEL_TYPES)
+        epochs = random.randint(12, 20)
+        timeout = random.randint(5, 40)   # 여유~임박 데드라인 혼재
         self.task_queue.append({
             "task_id": f"sim-task-{self.task_counter:04d}",
             "model_type": model,
             "epochs": epochs,
-            "deadline": time.time() + timeout,
-            "enqueue_time": time.time()
+            "deadline": self.sim_time + timeout,
         })
 
+    def _compute_exec_time(self, task, node_type):
+        gpu = self.cfg.get(node_type, {}).get("gpu_scale_factor", 1.0)
+        return (task["epochs"] * EPOCH_TIMES.get(task["model_type"].upper(), 0.10)) / max(0.1, gpu)
+
+    # ---------------------------------------------------------------- 상태 산출
+    def _danger_phase(self):
+        return 1 if (self.sim_time % 30.0) < 10.0 else 0
+
+    def _idle(self, ntype):
+        return any(w["status"] == "IDLE" and w["type"] == ntype for w in self.workers.values())
+
+    def _spot_count(self):
+        return sum(1 for w in self.workers.values() if w["type"] in ("spot_a", "spot_b"))
+
     def _get_state(self):
-        q_len = min(len(self.task_queue), 10)
-        
-        w1_act = 1  # On-demand는 항상 존재
-        w2_act = 1 if self.worker_2_scale > 0 else 0
-        active_bitmap = (w1_act * 1) + (w2_act * 2)
-        
-        budget_level = 0 if self.virtual_budget < 20.0 else (1 if self.virtual_budget < 70.0 else 2)
-        return (q_len, active_bitmap, budget_level)
+        head = self.task_queue[0] if self.task_queue else None
+        head_model = head["model_type"] if head else None
+        head_time_left = (head["deadline"] - self.sim_time) if head else None
+        return state_features.compute_state(
+            q_len=len(self.task_queue),
+            head_model=head_model,
+            head_time_left=head_time_left,
+            idle_od=self._idle("on_demand"),
+            idle_spot_a=self._idle("spot_a"),
+            idle_spot_b=self._idle("spot_b"),
+            budget=self.virtual_budget,
+            danger_phase=self._danger_phase(),
+        )
 
-    def step(self, action):
-        """
-        결정된 행동을 환경에 적용하고 상태 전이와 보상을 도출합니다.
+    def available_actions(self):
+        acts = [3]  # HOLD 항상 가능
+        if self.task_queue:
+            if self._idle("on_demand"):
+                acts.append(0)
+            if self._idle("spot_a"):
+                acts.append(1)
+            if self._idle("spot_b"):
+                acts.append(2)
+        if self._spot_count() < MAX_SPOT_SCALE:
+            acts.append(4)
+            acts.append(5)
+        # 예산 고갈 시 고비용 행동(OD 배정/증설) 마스킹
+        if self.virtual_budget <= 0.0:
+            for bad in (0, 4, 5):
+                if bad in acts:
+                    acts.remove(bad)
+        return acts if acts else [3]
 
-        Args:
-            action (int): 에이전트 행동 (0: OD 배정, 1: Spot 배정, 2: HOLD, 3: SCALE_OUT)
+    # ---------------------------------------------------------------- 보상
+    def _terminal_reward(self, task, node_type, exec_elapsed, success, evicted):
+        delay = max(0.0, self.sim_time - task["deadline"])
+        deadline_exceeded = self.sim_time > task["deadline"]
+        return self.agent.calculate_reward(
+            success=success,
+            execution_time=exec_elapsed,
+            worker_type=node_type,
+            delay_time=delay,
+            deadline_exceeded=deadline_exceeded,
+            current_model=task["model_type"],
+            co_scheduled_models=[],
+            evicted=evicted,
+        )
 
-        Returns:
-            tuple: (다음 상태, 즉각 보상, 종료 여부, 메타데이터)
-        """
-        reward = 0.0
-        done = False
-        info = {"msg": ""}
-        
-        # 1. 진행 중인 작업들의 가상 시간 흐름 업데이트 (1초 경과 모사)
-        finished_workers = []
-        for worker, task_info in list(self.running_tasks.items()):
-            task_info["remaining_time"] -= 1.0
-            if task_info["remaining_time"] <= 0.0:
-                finished_workers.append(worker)
-                
-        # 완료된 작업 피드백 및 보상 산출
-        for worker in finished_workers:
-            task_data = self.running_tasks[worker]
-            task = task_data["task"]
-            worker_type = "on_demand" if worker == "worker-1" else "spot_a"
-            
-            # 실제 실행 성공 완료 처리 (시뮬레이션이므로 92% 확률로 성공, 8% OOM 모사)
-            success = random.random() > 0.08 if task["model_type"] == "LSTM" else True
-            
-            # 가상 시간 및 비용 정산
-            exec_time = task_data["exec_time"]
-            cost_profile = self.agent.nodes_config.get(worker_type, {"cost_per_hour": 1.0 if worker_type == "on_demand" else 0.4})
-            cost_per_hour = cost_profile.get("cost_per_hour", 1.0)
-            task_cost = cost_per_hour * (exec_time / 3600.0)
-            self.virtual_budget -= task_cost
-            
-            # 보상 산출
-            end_time = time.time() + exec_time
-            delay_time = max(0.0, end_time - task["deadline"])
-            deadline_exceeded = end_time > task["deadline"]
-            
-            task_reward = self.agent.calculate_reward(
-                success=success,
-                execution_time=exec_time,
-                worker_type=worker_type,
-                delay_time=delay_time,
-                deadline_exceeded=deadline_exceeded
-            )
-            reward += task_reward
-            
-            # 워커 상태 복구
-            if worker == "worker-1":
-                self.worker_1_status = "IDLE"
-            else:
-                idx = int(worker.split("-")[-1]) - 1
-                if idx < len(self.worker_2_status):
-                    self.worker_2_status[idx] = "IDLE"
-                    
-            del self.running_tasks[worker]
-            
-            # 태스크 실패 시 큐 재배정 (Task Lineage 모사)
-            if not success:
-                self.task_queue.insert(0, task)
+    def _finalize(self, worker, success, evicted):
+        """실행 중이던 태스크를 종료 처리하고, 배정 시점 (s,a)에 지연 보상을 귀속시켜 Q-업데이트."""
+        task = worker["task"]
+        node_type = worker["type"]
+        elapsed = worker["exec_time"] - max(0.0, worker["remaining"]) if not success else worker["exec_time"]
+        reward = self._terminal_reward(task, node_type, max(0.0, elapsed), success, evicted)
+        s, a = worker["s"], worker["a"]
+        if s is not None and a is not None:
+            self.agent.update_q_value(s, a, reward, self._get_state())
+        # 워커 상태 정리
+        worker["task"] = None
+        worker["status"] = "IDLE"
+        worker["remaining"] = 0.0
+        worker["s"] = None
+        worker["a"] = None
+        if not success:
+            self.task_queue.insert(0, task)  # 실패분 재큐잉 (Lineage 복구 모사)
 
-        # 2. 새로운 태스크 40% 확률로 자동 생성 유입
+    # ---------------------------------------------------------------- 1스텝 전이
+    def step(self, state, action):
+        self.sim_time += DT
+
+        # 1) 실시간 예산 차감 (활성 노드 요금)
+        for w in self.workers.values():
+            cph = self.cfg.get(w["type"], {}).get("cost_per_hour", 0.0)
+            self.virtual_budget -= cph * (DT / 3600.0)
+
+        # 2) 진행 중 태스크 시간 경과 및 완료 처리 (지연 보상 귀속)
+        for w in list(self.workers.values()):
+            if w["status"] == "BUSY" and w["task"] is not None:
+                w["remaining"] -= DT
+                if w["remaining"] <= 0.0:
+                    self._finalize(w, success=True, evicted=False)
+
+        # 3) 노출시간 기반 스팟 회수 폴링 (실제 eviction_loop 미러링)
+        if self.sim_time >= self.next_evict_time:
+            self.next_evict_time += EVICTION_POLL_SEC
+            p_spot = self._danger_phase()
+            for wid, w in list(self.workers.items()):
+                if w["type"] in ("spot_a", "spot_b"):
+                    if FailureSimulator.check_eviction(w["type"], p_spot):
+                        # 실행 중이던 태스크는 회수 실패로 종료(강한 페널티) 후 워커 제거(스케일 다운)
+                        if w["status"] == "BUSY" and w["task"] is not None:
+                            self._finalize(w, success=False, evicted=True)
+                        del self.workers[wid]
+
+        # 4) 신규 태스크 유입 (40% 확률)
         if random.random() < 0.4:
             self._generate_task()
 
-        # 3. 에이전트 액션 처리
-        # 0: OD 배정
-        if action == 0:
-            if self.worker_1_status == "IDLE" and self.task_queue:
-                task = self.task_queue.pop(0)
-                self.worker_1_status = "BUSY"
-                # OD 연산 시간 모사 (기본 1Epoch당 약 3.0초)
-                exec_time = task["epochs"] * 3.0
-                self.running_tasks["worker-1"] = {
-                    "task": task,
-                    "remaining_time": exec_time,
-                    "exec_time": exec_time
-                }
-                info["msg"] = f"Assigned {task['task_id']} to OD Worker"
-            else:
-                # 불가능한 액션을 취했을 때의 경미한 감점
-                reward -= 1.0
-
-        # 1: Spot 배정
-        elif action == 1:
-            # IDLE 상태인 Spot 워커 색출
-            idle_spot_idx = -1
-            for idx, status in enumerate(self.worker_2_status):
-                if status == "IDLE":
-                    idle_spot_idx = idx
-                    break
-                    
-            if idle_spot_idx != -1 and self.task_queue:
-                task = self.task_queue.pop(0)
-                worker_name = f"worker-2-{idle_spot_idx + 1}"
-                self.worker_2_status[idle_spot_idx] = "BUSY"
-                # Spot 연산 시간 모사 (성능 계수 0.6 적용되어 OD보다 1.67배 느림)
-                exec_time = (task["epochs"] * 3.0) / 0.6
-                self.running_tasks[worker_name] = {
-                    "task": task,
-                    "remaining_time": exec_time,
-                    "exec_time": exec_time
-                }
-                info["msg"] = f"Assigned {task['task_id']} to Spot Worker {worker_name}"
-            else:
-                # 자원이 없거나 큐가 비어있는데 할당하려 한 페널티
-                reward -= 2.0
-
-        # 2: HOLD (대기 및 지연)
-        elif action == 2:
-            # 큐 적재된 태스크들에 대해 대기 페널티를 누적 부과
-            reward -= 0.1 * len(self.task_queue)
-            info["msg"] = "HOLD action"
-
-        # 3: SCALE_OUT (Spot 증설)
+        # 5) 에이전트 행동 적용
+        if action in (0, 1, 2):
+            ntype = ["on_demand", "spot_a", "spot_b"][action]
+            self._try_assign(ntype, state, action)
         elif action == 3:
-            if self.worker_2_scale < 3:
-                self.worker_2_scale += 1
-                self.worker_2_status.append("IDLE")
-                reward -= 0.5  # 인프라 기동 비용 감점
-                info["msg"] = f"Scaled-out Spot Worker (Current scale: {self.worker_2_scale})"
-            else:
-                reward -= 1.5  # 스케일 한도 초과 기동 페널티
+            # HOLD: 즉시 보상(대기 적체·마감 초과 페널티) → 즉시 Q-업데이트
+            hold_penalty = 0.0
+            for t in self.task_queue:
+                over = self.sim_time - t["deadline"]
+                if over > 0.0:
+                    hold_penalty += over * self.agent.DELAY_PENALTY_WEIGHT * 0.2
+            reward = 1.0 - hold_penalty
+            self.agent.update_q_value(state, action, reward, self._get_state())
+        elif action in (4, 5):
+            ntype = "spot_a" if action == 4 else "spot_b"
+            reward = self._scale_out(ntype)
+            self.agent.update_q_value(state, action, reward, self._get_state())
 
-        # 가상 예산 완전 고갈 시 에피소드 종료 조건 판정
-        if self.virtual_budget <= 0.0:
-            reward -= 50.0  # 파산 페널티
-            done = True
+        done = self.virtual_budget <= 0.0
+        return self._get_state(), done
 
-        return self._get_state(), reward, done, info
+    def _try_assign(self, ntype, state, action):
+        # 해당 타입 IDLE 워커 탐색
+        target = None
+        for w in self.workers.values():
+            if w["type"] == ntype and w["status"] == "IDLE":
+                target = w
+                break
+        if target is None or not self.task_queue:
+            # 불가능한 배정 시도 → 경미한 즉시 페널티
+            self.agent.update_q_value(state, action, -1.0, self._get_state())
+            return
+        task = self.task_queue.pop(0)
+        # 자원경합 OOM 사전 판정(동거는 1노드 1태스크라 0). 실패 시 즉시 종료 후 재큐잉.
+        if FailureSimulator.check_oom(task["model_type"], task["task_id"], ntype, 0):
+            reward = self._terminal_reward(task, ntype, 0.0, success=False, evicted=False)
+            self.agent.update_q_value(state, action, reward, self._get_state())
+            self.task_queue.insert(0, task)
+            return
+        exec_time = self._compute_exec_time(task, ntype)
+        target["status"] = "BUSY"
+        target["task"] = task
+        target["exec_time"] = exec_time
+        target["remaining"] = exec_time
+        target["s"] = state       # 지연 보상 귀속용 (배정 시점 상태/행동 기록)
+        target["a"] = action
 
-def train_offline(epochs=20000, cost_model_path=None):
-    """
-    시뮬레이션 환경을 통해 Q-Learning 에이전트를 오프라인으로 훈련시킵니다.
-    """
-    print("=== [Q-Learning] 오프라인 시뮬레이션 사전 훈련을 시작합니다. ===")
+    def _scale_out(self, ntype):
+        if self._spot_count() >= MAX_SPOT_SCALE:
+            return -1.5  # 한도 초과
+        # OutOfCapacity 모사
+        if FailureSimulator.check_out_of_capacity(ntype):
+            return -10.0
+        self.spot_seq += 1
+        wid = f"{'worker-2' if ntype == 'spot_a' else 'worker-3'}-{self.spot_seq}"
+        self.workers[wid] = {"type": ntype, "status": "IDLE", "task": None,
+                             "remaining": 0.0, "exec_time": 0.0, "s": None, "a": None}
+        # 증설 자체는 요금 부담(감점), 저가 노드일수록 부담이 작다
+        return -1.0 if ntype == "spot_a" else -0.5
+
+
+def train_offline(episodes=50000, cost_model_path=None):
+    """시뮬레이션 환경(실제 세계 미러링)을 통해 Q-Learning 에이전트를 오프라인 사전 훈련한다."""
+    print("=== [Q-Learning] 오프라인 시뮬레이션 사전 훈련 시작 (세계 미러링) ===")
     env = SimulatedEnvironment(cost_model_path=cost_model_path)
     agent = env.agent
-    
-    # 훈련용 하이퍼파라미터 세팅 (시뮬레이션 상에서 감쇄가 일어나도록 설정)
+
     agent.epsilon = 1.0
     agent.epsilon_min = 0.05
-    agent.decay_rate = 0.99995  # 수렴을 위한 부드러운 감쇄
-    
+    agent.decay_rate = 0.99997  # 상태공간이 넓어 부드러운 감쇄
+
     cumulative_rewards = 0.0
-    success_episodes = 0
-    
-    for epoch in range(1, epochs + 1):
+    solvent_episodes = 0
+
+    for ep in range(1, episodes + 1):
         state = env.reset()
         episode_reward = 0.0
-        step_count = 0
-        
-        while step_count < 100:  # 에피소드당 최대 100틱 제한
-            step_count += 1
-            
-            # 가용 행동 필터링
-            available_actions = [2]  # HOLD는 항상 가능
-            if env.worker_1_status == "IDLE":
-                available_actions.append(0)
-            if "IDLE" in env.worker_2_status:
-                available_actions.append(1)
-            if env.worker_2_scale < 3:
-                available_actions.append(3)
-                
-            action = agent.choose_action(state, available_actions)
-            next_state, reward, done, _ = env.step(action)
-            
-            # GCS 상태에 맞춘 가용 행동 리스트
-            next_available = [2]
-            if env.worker_1_status == "IDLE":
-                next_available.append(0)
-            if "IDLE" in env.worker_2_status:
-                next_available.append(1)
-            if env.worker_2_scale < 3:
-                next_available.append(3)
-                
-            agent.update_q_value(state, action, reward, next_state, next_available)
+        for _ in range(200):  # 에피소드당 최대 200틱
+            actions = env.available_actions()
+            action = agent.choose_action(state, actions)
+            q_before = agent.get_q_value(state, action)
+            next_state, done = env.step(state, action)
             state = next_state
-            episode_reward += reward
-            
+            episode_reward += agent.get_q_value(state, action) - q_before  # 근사 진척 (로깅용)
             if done:
                 break
-                
+
         cumulative_rewards += episode_reward
         if env.virtual_budget > 0.0:
-            success_episodes += 1
-            
-        if epoch % 2000 == 0:
-            avg_reward = cumulative_rewards / 2000
-            success_rate = (success_episodes / 2000) * 100.0
-            print(f"Episode {epoch:5d}/{epochs} | Avg Reward: {avg_reward:7.2f} | SLA/Budget Success: {success_rate:5.1f}% | Current Epsilon: {agent.epsilon:.4f}")
+            solvent_episodes += 1
+
+        if ep % 2000 == 0:
+            print(f"Episode {ep:6d}/{episodes} | 상태수: {len(agent.q_table):5d} | "
+                  f"예산생존율: {(solvent_episodes/2000)*100:5.1f}% | Epsilon: {agent.epsilon:.4f}")
             cumulative_rewards = 0.0
-            success_episodes = 0
-            
-    # 완성된 Q-Table 저장
+            solvent_episodes = 0
+
     agent.save_q_table()
-    print("=== [Q-Learning] 오프라인 사전 훈련 완료 및 q_table.json 저장 성공. ===")
+    print(f"=== [Q-Learning] 사전 훈련 완료. 학습 상태수={len(agent.q_table)} | 저장경로={agent.q_table_path} ===")
+
 
 if __name__ == '__main__':
     COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../common/cost_model.yaml'))
-    train_offline(epochs=20000, cost_model_path=COST_MODEL_PATH)
+    train_offline(episodes=50000, cost_model_path=COST_MODEL_PATH)
