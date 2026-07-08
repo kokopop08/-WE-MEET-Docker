@@ -41,8 +41,9 @@ class SimulatedEnvironment:
     def reset(self):
         self.sim_time = 0.0
         self.next_evict_time = EVICTION_POLL_SEC
-        # 예산 축의 모든 국면(위험/낮음/여유)을 학습에서 겪도록 에피소드마다 초기 예산을 무작위화
-        self.virtual_budget = random.uniform(1.0, 4.0)
+        # 예산 축의 모든 국면(위험/낮음/여유)과 '실제 고갈'을 학습에서 겪도록 초기 예산을 낮게 무작위화.
+        # (실제 벤치마크 시나리오 예산 $1.5 부근을 중심으로 분포시켜 예산 압박을 실제로 체감하게 한다)
+        self.virtual_budget = random.uniform(0.5, 3.0)
         self.task_counter = 0
         self.task_queue = []
 
@@ -100,7 +101,8 @@ class SimulatedEnvironment:
 
     def available_actions(self):
         acts = [3]  # HOLD 항상 가능
-        if self.task_queue:
+        head = self.task_queue[0] if self.task_queue else None
+        if head is not None:
             if self._idle("on_demand"):
                 acts.append(0)
             if self._idle("spot_a"):
@@ -115,6 +117,10 @@ class SimulatedEnvironment:
             for bad in (0, 4, 5):
                 if bad in acts:
                     acts.remove(bad)
+        # 마감 임박(<=10s) 시 HOLD 억제 (실제 q_learning.py 마스킹과 동일) → 무행동 함정 방지
+        if head is not None and (head["deadline"] - self.sim_time) <= 10.0:
+            if any(a in acts for a in (0, 1, 2)) and 3 in acts:
+                acts.remove(3)
         return acts if acts else [3]
 
     # ---------------------------------------------------------------- 보상
@@ -187,13 +193,13 @@ class SimulatedEnvironment:
             ntype = ["on_demand", "spot_a", "spot_b"][action]
             self._try_assign(ntype, state, action)
         elif action == 3:
-            # HOLD: 즉시 보상(대기 적체·마감 초과 페널티) → 즉시 Q-업데이트
+            # HOLD: 즉시 보상(대기 적체·마감 초과 페널티) → 즉시 Q-업데이트. 실제 q_learning.py와 동일 수식.
             hold_penalty = 0.0
             for t in self.task_queue:
                 over = self.sim_time - t["deadline"]
                 if over > 0.0:
                     hold_penalty += over * self.agent.DELAY_PENALTY_WEIGHT * 0.2
-            reward = 1.0 - hold_penalty
+            reward = 1.0 - 0.5 * len(self.task_queue) - hold_penalty
             self.agent.update_q_value(state, action, reward, self._get_state())
         elif action in (4, 5):
             ntype = "spot_a" if action == 4 else "spot_b"
@@ -259,7 +265,7 @@ def train_offline(episodes=50000, cost_model_path=None):
     for ep in range(1, episodes + 1):
         state = env.reset()
         episode_reward = 0.0
-        for _ in range(200):  # 에피소드당 최대 200틱
+        for _ in range(400):  # 에피소드당 최대 400틱 (예산 고갈 동역학을 겪기에 충분한 길이)
             actions = env.available_actions()
             action = agent.choose_action(state, actions)
             q_before = agent.get_q_value(state, action)

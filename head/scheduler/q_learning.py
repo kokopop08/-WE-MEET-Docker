@@ -160,12 +160,14 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 hold_penalty = 0.0
                 with gcs_state.queue_lock:
+                    q_len_hold = len(gcs_state.task_queue)
                     for t in gcs_state.task_queue:
                         time_over = time.time() - t["deadline"]
                         if time_over > 0.0:
                             hold_penalty += time_over * agent.DELAY_PENALTY_WEIGHT * 0.2
-                
-                reward = 1.0 - hold_penalty
+
+                # 대기열이 밀려 있는데 보류하면 감점(무행동 함정 방지). 큐가 거의 비었을 때만 소폭 양(+).
+                reward = 1.0 - 0.5 * q_len_hold - hold_penalty
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()

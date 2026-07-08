@@ -69,12 +69,14 @@ class QLearningAgent:
             }
 
         # 보상 설계용 핵심 가중치 상수
-        self.SUCCESS_REWARD = 10.0
+        # 성공 보상은 정상적인(적절한 노드) 배정이 확실히 양(+)의 기대값을 갖도록 비용/makespan/회수 페널티보다
+        # 충분히 크게 잡는다. 그렇지 않으면 에이전트가 어떤 배정도 하지 않고 HOLD만 반복하는 무행동 함정에 빠진다.
+        self.SUCCESS_REWARD = 20.0
         self.COST_WEIGHT = 1000.0   # 시간 환산 비용이 매우 작으므로 감점 체감을 위해 2.0에서 1000.0으로 대폭 상향
         self.DELAY_PENALTY_WEIGHT = 5.0
-        # 회수(Eviction)로 태스크가 죽었을 때 부과하는 강한 페널티. 성공 보상(+10)을 크게 상회하여
+        # 회수(Eviction)로 태스크가 죽었을 때 부과하는 강한 페널티. 성공 보상을 상회하여
         # "느린 노드에 무거운 작업을 넣으면 회수 룰렛에 여러 번 노출되어 죽는다"를 학습하게 만든다.
-        self.EVICTION_PENALTY = 20.0
+        self.EVICTION_PENALTY = 25.0
         # makespan(체류/실행 시간) 상시 감점 가중치. 데드라인 초과 여부와 무관하게 '느림' 자체에 대가를 부과하여
         # "싸지만 느린" Spot-B가 공짜로 보이는 편향을 제거한다.
         self.MAKESPAN_WEIGHT = 0.5
