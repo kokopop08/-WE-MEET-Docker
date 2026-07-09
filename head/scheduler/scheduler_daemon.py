@@ -166,10 +166,11 @@ def generate_mock_tasks():
     """시뮬레이터 부하 검증을 위해 주기적으로 랜덤 가상 태스크를 생성하여 큐에 적재합니다."""
     model_types = ["CNN", "RNN", "LSTM"]
     
-    # 4%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
-    # 96%의 확률로는 6%의 낮은 확률로만 단일 태스크 유입
-    is_burst = random.random() < 0.04
-    is_normal = not is_burst and (random.random() < 0.06)
+    # 가상 태스크 생성 빈도 상향 (쉬는 시간 단축)
+    # 8%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
+    # 92%의 확률로는 18%의 확률로 단일 태스크 유입
+    is_burst = random.random() < 0.08
+    is_normal = not is_burst and (random.random() < 0.18)
     
     if is_burst:
         num_new_tasks = random.randint(5, 8)
