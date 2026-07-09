@@ -8,6 +8,7 @@ import head.state as gcs_state
 import head.cluster_manager as cluster_manager
 import head.dashboard.server as dashboard
 import head.q_learning.state_features as state_features
+import head.q_learning.reward_policy as reward_policy
 
 
 def _calculate_next_state():
@@ -158,16 +159,13 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
         elif action == 3:
             dashboard.log_event(f"[Q-Learning Action] HOLD 상태 선택 (대기열 크기: {q_len_real})")
             if gcs_state.Q_LEARNING_TRAINING_MODE:
-                hold_penalty = 0.0
+                # HOLD 보상은 reward_policy(유일 진실)에 위임 — 시뮬레이터와 동일 수식 보장.
                 with gcs_state.queue_lock:
                     q_len_hold = len(gcs_state.task_queue)
-                    for t in gcs_state.task_queue:
-                        time_over = time.time() - t["deadline"]
-                        if time_over > 0.0:
-                            hold_penalty += time_over * agent.DELAY_PENALTY_WEIGHT * 0.2
+                    overdue = [time.time() - t["deadline"] for t in gcs_state.task_queue]
 
                 # 대기열이 밀려 있는데 보류하면 감점(무행동 함정 방지). 큐가 거의 비었을 때만 소폭 양(+).
-                reward = 1.0 - 0.5 * q_len_hold - hold_penalty
+                reward = reward_policy.hold_reward(q_len_hold, overdue, agent.DELAY_PENALTY_WEIGHT)
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()
@@ -195,16 +193,8 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     scale_success = True
                     
             if gcs_state.Q_LEARNING_TRAINING_MODE:
-                if scale_success:
-                    reward = (4.0 if u_sla == 1 else -1.5) - 3.5
-                    if c_level == 1:
-                        reward -= 3.0
-                    else:
-                        reward += 3.0
-                else:
-                    # 물리적 자원 부족 또는 OutOfCapacity 가동 실패 시 강력한 페널티 벌점 부과
-                    reward = -10.0
-                    
+                # SCALE 보상은 reward_policy(유일 진실)에 위임 — 시뮬레이터와 동일 수식 보장.
+                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success)
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()
@@ -232,16 +222,8 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     scale_success = True
                     
             if gcs_state.Q_LEARNING_TRAINING_MODE:
-                if scale_success:
-                    reward = (1.0 if u_sla == 1 else 0.0) - 2.0
-                    if c_level == 1:
-                        reward -= 2.0
-                    else:
-                        reward += 1.0
-                else:
-                    # 물리적 자원 부족 또는 OutOfCapacity 가동 실패 시 강력한 페널티 벌점 부과
-                    reward = -10.0
-                    
+                # SCALE 보상은 reward_policy(유일 진실)에 위임 — 시뮬레이터와 동일 수식 보장.
+                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success)
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()

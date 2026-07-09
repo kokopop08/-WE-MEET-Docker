@@ -5,13 +5,26 @@
 #   산출물 data/q_table.json 을 docker 부팅 시 agent.load_q_table()가 읽어 곧바로 추론에 사용하고,
 #   Q_LEARNING_TRAINING_MODE=True면 이 warm-start에서 이어받아 실전 온라인 미세조정을 한다.
 #
-# [세계 통일 원칙] 이 시뮬레이터는 실제 docker 경로(head/)의 물리를 '미러링'한다:
-#   - 노드 3종(on_demand/spot_a/spot_b)·성능계수(gpu_scale)·요금(cost_per_hour)
-#   - 노출시간 기반 스팟 회수: 10초 폴링 + 30초 위험구간 사이클
-#   - 자원경합 기반 OOM(FailureSimulator.check_oom)
-#   - 6대 행동(0~5)과 state_features.compute_state()의 동일한 6-튜플 상태
-#   - ASSIGN 액션의 지연 보상(태스크가 실제 완료/회수될 때 그 배정 (state,action)에 보상 귀속)
-#   덕분에 여기서 학습한 Q-테이블이 추론(docker)에서 그대로 통한다(sim-to-real).
+# [세계 통일 원칙] 이 시뮬레이터는 실제 docker 경로(head/scheduler/)의 물리·행동·보상·종료
+#   동역학을 최대한 '미러링'한다. 학습 결과가 추론에서 그대로 통하도록(sim-to-real):
+#   - 상태 인코딩: state_features.compute_state (실제와 동일한 6-튜플)
+#   - ASSIGN(0/1/2) 지연 보상: agent.calculate_reward (실제와 동일한 완료-시점 귀속)
+#   - HOLD(3)/SCALE(4,5) 보상: reward_policy (실제 q_learning.py와 공유하는 유일 진실)
+#   - 물리: cost_model.yaml 요금·gpu_scale, FailureSimulator의 회수/OOM/OutOfCapacity 확률
+#   - 회수: 10초 폴링 + 30초 위험구간(앞 10초) 사이클
+#   - 예산: 활성 노드 요금 실시간 차감, 0 이하면 파산(에피소드 종료)
+#   - 스케줄러 드레인: 한 틱에 유휴 워커가 있는 한 연속 배정(실제 while-loop), HOLD/SCALE는 틱 종료
+#   - scale-in: 유휴 spot 3초 지속 시 1대 자동 축소
+#   - 재시도 캡: 태스크가 3회 실패하면 재큐 대신 영구 유실(DEAD_LETTER)
+#
+# [의도적 단순화 — 실제와 다르지만 근거 있음]
+#   - Map-Reduce 미모델: 실제는 epochs>=8 태스크를 최대 3워커로 분할(mock은 거의 전부 해당)하지만,
+#     충실 재현은 구현 복잡도가 크고 잘못 모델하면 오히려 새 divergence를 낳는다. 대신 '1태스크=1워커'로
+#     두되 실행시간을 실측 벤치 CSV 분포(성공 ~1.5s floor)에 맞춰 보정한다. 이에 따라 동거(co-scheduling)
+#     압력도 발생하지 않으므로 co_membound=0으로 둔다(실제도 1태스크-1워커 정상경로에선 대개 0).
+#   - MAX_SPOT_SCALE: 실제는 호스트 RAM 기반 max(5, 추천)이라 오프라인서 재현 불가 → 대표값 고정.
+#   - 초기 예산 uniform(0.5,3.0): 실제 기본 예산 $1.5는 budget_level 0/1만 점유한다. 이 분포는 그 국면을
+#     충실히 덮으므로 의도된 정렬이다(level 2를 억지로 덮으려 범위를 넓히지 말 것 — 실제엔 없는 상태).
 #
 # 50,000 에피소드를 실제 docker로 학습하면 에피소드당 수 분이 걸려 며칠~몇 주가 소요되므로,
 # 대량 사전학습은 이 빠른 미러링 시뮬레이터에서 수행한다.
@@ -26,17 +39,30 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')
 
 from head.q_learning.agent import QLearningAgent
 import head.q_learning.state_features as state_features
+import head.q_learning.reward_policy as reward_policy
 from common.failure_simulator import FailureSimulator
 
 DT = 1.0                                   # 1틱 = 1 시뮬레이션 초 (실제 회수 폴링 10초와 동일 축척)
 EVICTION_POLL_SEC = 10.0                   # 실제 eviction_loop 폴링 주기와 동일
-EPOCH_TIMES = {"CNN": 0.22, "RNN": 0.10, "LSTM": 0.10}
-MAX_SPOT_SCALE = 6
+MAX_SPOT_SCALE = 5                         # 실제 scheduler_daemon의 max(5, 추천) 대표 고정값 (호스트 RAM 의존분 재현 불가)
 MODEL_TYPES = ["CNN", "RNN", "LSTM"]
+
+# 재시도 캡: head/scheduler/task_executor.py::MAX_TASK_ATTEMPTS 미러(무거운 grpc/proto 의존을
+# 오프라인 학습에 끌어오지 않기 위해 값만 복제한다. 두 곳이 어긋나면 안 되는 상수).
+MAX_TASK_ATTEMPTS = 3
+
+# --- 실행시간 캘리브레이션 (실측 data/benchmark_results_q_learning.csv 성공 행 기준) ---
+# 실제 성공 실행시간은 폴링 granularity로 ~1.5s floor에 몰리고(p50 1.53), 소폭의 모델·노드 의존 꼬리를
+# 갖는다(p90 ~4-6s). epochs 선형 모델은 형태가 틀리므로 'floor + 작은 가변항 / gpu_scale'로 맞춘다.
+EXEC_FLOOR = 1.5
+PER_EPOCH = {"CNN": 0.06, "RNN": 0.03, "LSTM": 0.04}   # 연산바운드 CNN이 가장 무겁게
 
 
 class SimulatedEnvironment:
     """실제 docker 스케줄링 세계를 미러링하는 학습용 시뮬레이션 환경."""
+
+    # 상태 파생에 쓰는 시간당 요금(state_features.compute_current_state와 동일한 상수 — cost_level 일치용)
+    COST_PER_HOUR = {"on_demand": 7.10, "spot_a": 2.20, "spot_b": 0.90}
 
     def __init__(self, cost_model_path=None):
         self.agent = QLearningAgent(cost_model_path=cost_model_path)
@@ -47,11 +73,12 @@ class SimulatedEnvironment:
     def reset(self):
         self.sim_time = 0.0
         self.next_evict_time = EVICTION_POLL_SEC
-        # 예산 축의 모든 국면(위험/낮음/여유)과 '실제 고갈'을 학습에서 겪도록 초기 예산을 낮게 무작위화.
-        # (실제 벤치마크 시나리오 예산 $1.5 부근을 중심으로 분포시켜 예산 압박을 실제로 체감하게 한다)
+        # 예산 축의 모든 국면(위험/낮음)과 '실제 고갈'을 학습에서 겪도록 초기 예산을 낮게 무작위화.
+        # (실제 벤치마크 시나리오 예산 $1.5 부근 → budget_level 0/1을 충실히 덮는다)
         self.virtual_budget = random.uniform(0.5, 3.0)
         self.task_counter = 0
         self.task_queue = []
+        self.idle_spot_duration = 0.0   # 유휴 spot 지속 시간(scale-in 타이머)
 
         # 워커: worker-1(OD) 상시 1대, spot_a/spot_b는 0대에서 동적 증설
         self.workers = {
@@ -68,19 +95,21 @@ class SimulatedEnvironment:
         self.task_counter += 1
         model = random.choice(MODEL_TYPES)
         epochs = random.randint(12, 20)
-        timeout = random.randint(5, 12)   # 실제 scheduler_daemon과 동일하게 5~12초로 단축하여 타이트하게 학습
+        timeout = random.randint(5, 12)   # 실제 scheduler_daemon과 동일하게 5~12초
         self.task_queue.append({
             "task_id": f"sim-task-{self.task_counter:04d}",
             "model_type": model,
             "epochs": epochs,
             "deadline": self.sim_time + timeout,
+            "attempts": 0,
         })
 
     def _compute_exec_time(self, task, node_type):
         gpu = self.cfg.get(node_type, {}).get("gpu_scale_factor", 1.0)
-        return (task["epochs"] * EPOCH_TIMES.get(task["model_type"].upper(), 0.10)) / max(0.1, gpu)
+        per = PER_EPOCH.get(task["model_type"].upper(), 0.04)
+        return EXEC_FLOOR + (task["epochs"] * per) / max(0.1, gpu)
 
-    # ---------------------------------------------------------------- 상태 산출
+    # ---------------------------------------------------------------- 상태/관측
     def _danger_phase(self):
         return 1 if (self.sim_time % 30.0) < 10.0 else 0
 
@@ -90,8 +119,23 @@ class SimulatedEnvironment:
     def _spot_count(self):
         return sum(1 for w in self.workers.values() if w["type"] in ("spot_a", "spot_b"))
 
+    def _has_idle_spot(self):
+        return any(w["status"] == "IDLE" and w["type"] in ("spot_a", "spot_b") for w in self.workers.values())
+
+    def _cost_level(self):
+        """실제 state_features와 동일: 총 시간당요금 > $9면 고비용 국면(1). OD+spot_a 1대면 이미 9.30."""
+        total = sum(self.COST_PER_HOUR.get(w["type"], 0.0) for w in self.workers.values())
+        return 1 if total > 9.00 else 0
+
+    def _head(self):
+        return self.task_queue[0] if self.task_queue else None
+
+    def _urgent(self):
+        head = self._head()
+        return head is not None and (head["deadline"] - self.sim_time) <= state_features.SLA_TIGHT_SEC
+
     def _get_state(self):
-        head = self.task_queue[0] if self.task_queue else None
+        head = self._head()
         head_model = head["model_type"] if head else None
         head_time_left = (head["deadline"] - self.sim_time) if head else None
         return state_features.compute_state(
@@ -106,8 +150,9 @@ class SimulatedEnvironment:
         )
 
     def available_actions(self):
+        """실제 q_learning.py의 액션 마스킹 규칙을 미러링."""
         acts = [3]  # HOLD 항상 가능
-        head = self.task_queue[0] if self.task_queue else None
+        head = self._head()
         if head is not None:
             if self._idle("on_demand"):
                 acts.append(0)
@@ -123,13 +168,12 @@ class SimulatedEnvironment:
             for bad in (0, 4, 5):
                 if bad in acts:
                     acts.remove(bad)
-        # 마감 임박(<=10s) 시 HOLD 억제 (실제 q_learning.py 마스킹과 동일) → 무행동 함정 방지
-        if head is not None and (head["deadline"] - self.sim_time) <= 10.0:
-            if any(a in acts for a in (0, 1, 2)) and 3 in acts:
-                acts.remove(3)
+        # 마감 임박 시 HOLD 억제(무행동 함정 방지) — 실제와 동일
+        if self._urgent() and any(a in acts for a in (0, 1, 2)) and 3 in acts:
+            acts.remove(3)
         return acts if acts else [3]
 
-    # ---------------------------------------------------------------- 보상
+    # ---------------------------------------------------------------- 보상 (ASSIGN 완료-시점)
     def _terminal_reward(self, task, node_type, exec_elapsed, success, evicted):
         delay = max(0.0, self.sim_time - task["deadline"])
         deadline_exceeded = self.sim_time > task["deadline"]
@@ -140,16 +184,24 @@ class SimulatedEnvironment:
             delay_time=delay,
             deadline_exceeded=deadline_exceeded,
             current_model=task["model_type"],
-            co_scheduled_models=[],
+            co_scheduled_models=[],   # Map-Reduce 미모델 → 동거 없음(파일 상단 근거 주석 참조)
             evicted=evicted,
         )
+
+    def _requeue_or_deadletter(self, task):
+        """실패 태스크 재큐 — 단, 3회 도달 시 재큐하지 않고 영구 유실(실제 DEAD_LETTER 미러)."""
+        task["attempts"] = task.get("attempts", 0) + 1
+        if task["attempts"] >= MAX_TASK_ATTEMPTS:
+            return  # 드롭(큐 무한 점유 차단)
+        self.task_queue.insert(0, task)
 
     def _finalize(self, worker, success, evicted):
         """실행 중이던 태스크를 종료 처리하고, 배정 시점 (s,a)에 지연 보상을 귀속시켜 Q-업데이트."""
         task = worker["task"]
         node_type = worker["type"]
-        elapsed = worker["exec_time"] - max(0.0, worker["remaining"]) if not success else worker["exec_time"]
-        reward = self._terminal_reward(task, node_type, max(0.0, elapsed), success, evicted)
+        # 성공: 전체 실행시간. 실패(회수): 죽기 전까지 흘려보낸(낭비된) 시간.
+        elapsed = worker["exec_time"] if success else max(0.0, worker["exec_time"] - max(0.0, worker["remaining"]))
+        reward = self._terminal_reward(task, node_type, elapsed, success, evicted)
         s, a = worker["s"], worker["a"]
         if s is not None and a is not None:
             self.agent.update_q_value(s, a, reward, self._get_state())
@@ -160,10 +212,14 @@ class SimulatedEnvironment:
         worker["s"] = None
         worker["a"] = None
         if not success:
-            self.task_queue.insert(0, task)  # 실패분 재큐잉 (Lineage 복구 모사)
+            self._requeue_or_deadletter(task)
 
-    # ---------------------------------------------------------------- 1스텝 전이
-    def step(self, state, action):
+    # ---------------------------------------------------------------- 1틱 전이
+    def step(self):
+        """
+        한 틱(=DT초)을 전이한다. 실제 scheduler_daemon 1주기를 미러링:
+        예산차감 → 진행/완료 → 회수폴링 → 태스크유입 → scale-in → 스케줄러 드레인(다중 결정).
+        """
         self.sim_time += DT
 
         # 1) 실시간 예산 차감 (활성 노드 요금)
@@ -190,54 +246,75 @@ class SimulatedEnvironment:
                             self._finalize(w, success=False, evicted=True)
                         del self.workers[wid]
 
-        # 4) 신규 태스크 유입 (실제 docker의 0.6초 주기당 4% burst / 18% normal을 1초 주기로 보정 매핑)
+        # 4) 신규 태스크 유입 (실제 docker burst 4% / normal 18% 를 1초 주기로 보정 매핑)
         is_burst = random.random() < 0.067
         is_normal = not is_burst and (random.random() < 0.30)
         if is_burst:
-            num_new = random.randint(5, 8)
-            for _ in range(num_new):
+            for _ in range(random.randint(5, 8)):
                 self._generate_task()
         elif is_normal:
             self._generate_task()
 
-        # 5) 에이전트 행동 적용
-        if action in (0, 1, 2):
-            ntype = ["on_demand", "spot_a", "spot_b"][action]
-            self._try_assign(ntype, state, action)
-        elif action == 3:
-            # HOLD: 즉시 보상(대기 적체·마감 초과 페널티) → 즉시 Q-업데이트. 실제 q_learning.py와 동일 수식.
-            hold_penalty = 0.0
-            for t in self.task_queue:
-                over = self.sim_time - t["deadline"]
-                if over > 0.0:
-                    hold_penalty += over * self.agent.DELAY_PENALTY_WEIGHT * 0.2
-            reward = 1.0 - 0.5 * len(self.task_queue) - hold_penalty
-            self.agent.update_q_value(state, action, reward, self._get_state())
-        elif action in (4, 5):
-            ntype = "spot_a" if action == 4 else "spot_b"
-            reward = self._scale_out(ntype)
-            self.agent.update_q_value(state, action, reward, self._get_state())
+        # 5) scale-in: 유휴 spot가 3초 지속되면 1대 축소 (실제 q_learning.py:39-53 미러)
+        if self._has_idle_spot():
+            self.idle_spot_duration += DT
+        else:
+            self.idle_spot_duration = 0.0
+        if self.idle_spot_duration >= 3.0 and self._spot_count() > 0:
+            self._scale_in_one_spot()
+            self.idle_spot_duration = 0.0
+
+        # 6) 스케줄러 드레인 — 한 틱에 유휴 워커가 있는 한 연속 배정. HOLD/SCALE는 틱 종료.
+        self._decision_drain()
 
         done = self.virtual_budget <= 0.0
-        return self._get_state(), done
+        return done
+
+    def _decision_drain(self):
+        # 실제 q_learning.py의 while-loop: ASSIGN이면 계속 드레인, HOLD/SCALE/큐빔/[3]-only면 종료.
+        # 배정 가능한 워커·태스크 수로 상한이 잡히지만 안전 캡을 둔다.
+        for _ in range(64):
+            if not self.task_queue:
+                break
+            acts = self.available_actions()
+            if acts == [3]:
+                # 실제는 이 경우 HOLD 업데이트 없이 break한다.
+                break
+            state = self._get_state()
+            action = self.agent.choose_action(state, acts)
+
+            if action in (0, 1, 2):
+                ntype = ["on_demand", "spot_a", "spot_b"][action]
+                self._try_assign(ntype, state, action)
+                continue  # 다음 태스크로 계속 드레인
+
+            elif action == 3:
+                # HOLD 즉시 보상 — reward_policy(유일 진실). 실제와 동일 수식.
+                overdue = [self.sim_time - t["deadline"] for t in self.task_queue]
+                reward = reward_policy.hold_reward(len(self.task_queue), overdue, self.agent.DELAY_PENALTY_WEIGHT)
+                self.agent.update_q_value(state, action, reward, self._get_state())
+                break
+
+            elif action in (4, 5):
+                self._scale_out(action, state)
+                break
 
     def _try_assign(self, ntype, state, action):
-        # 해당 타입 IDLE 워커 탐색
         target = None
         for w in self.workers.values():
             if w["type"] == ntype and w["status"] == "IDLE":
                 target = w
                 break
         if target is None or not self.task_queue:
-            # 불가능한 배정 시도 → 경미한 즉시 페널티
-            self.agent.update_q_value(state, action, -1.0, self._get_state())
+            # 불가능한 배정 — 실제는 penalty 없이 defer. reward_policy로 중립(0.0) 처리.
+            self.agent.update_q_value(state, action, reward_policy.impossible_assign_reward(), self._get_state())
             return
         task = self.task_queue.pop(0)
-        # 자원경합 OOM 사전 판정(동거는 1노드 1태스크라 0). 실패 시 즉시 종료 후 재큐잉.
+        # 자원경합 OOM 사전 판정(동거 0). 실패 시 완료-시점 페널티 귀속 후 재큐/드롭.
         if FailureSimulator.check_oom(task["model_type"], task["task_id"], ntype, 0):
             reward = self._terminal_reward(task, ntype, 0.0, success=False, evicted=False)
             self.agent.update_q_value(state, action, reward, self._get_state())
-            self.task_queue.insert(0, task)
+            self._requeue_or_deadletter(task)
             return
         exec_time = self._compute_exec_time(task, ntype)
         target["status"] = "BUSY"
@@ -247,18 +324,43 @@ class SimulatedEnvironment:
         target["s"] = state       # 지연 보상 귀속용 (배정 시점 상태/행동 기록)
         target["a"] = action
 
-    def _scale_out(self, ntype):
+    def _scale_out(self, action, state):
+        ntype = "spot_a" if action == 4 else "spot_b"
+        urgent = self._urgent()
+        cost_level = self._cost_level()
+
+        # 한도 초과면 증설 불가 → 실패 보상
         if self._spot_count() >= MAX_SPOT_SCALE:
-            return -1.5  # 한도 초과
-        # OutOfCapacity 모사
-        if FailureSimulator.check_out_of_capacity(ntype):
-            return -10.0
-        self.spot_seq += 1
-        wid = f"{'worker-2' if ntype == 'spot_a' else 'worker-3'}-{self.spot_seq}"
-        self.workers[wid] = {"type": ntype, "status": "IDLE", "task": None,
-                             "remaining": 0.0, "exec_time": 0.0, "s": None, "a": None}
-        # 증설 자체는 요금 부담(감점), 저가 노드일수록 부담이 작다
-        return -1.0 if ntype == "spot_a" else -0.5
+            reward = reward_policy.scale_reward(action, urgent, cost_level, scale_success=False)
+            self.agent.update_q_value(state, action, reward, self._get_state())
+            return
+
+        # 실제 q_learning.py: q_len>=6 이고 여유가 있으면 2대 동시 증설
+        q_len = len(self.task_queue)
+        want = 2 if (q_len >= 6 and self._spot_count() < MAX_SPOT_SCALE - 1) else 1
+
+        scaled = 0
+        for _ in range(want):
+            if self._spot_count() >= MAX_SPOT_SCALE:
+                break
+            if FailureSimulator.check_out_of_capacity(ntype):
+                continue  # OutOfCapacity 거절
+            self.spot_seq += 1
+            wid = f"{'worker-2' if ntype == 'spot_a' else 'worker-3'}-{self.spot_seq}"
+            self.workers[wid] = {"type": ntype, "status": "IDLE", "task": None,
+                                 "remaining": 0.0, "exec_time": 0.0, "s": None, "a": None}
+            scaled += 1
+
+        reward = reward_policy.scale_reward(action, urgent, cost_level, scale_success=(scaled > 0))
+        self.agent.update_q_value(state, action, reward, self._get_state())
+
+    def _scale_in_one_spot(self):
+        """유휴 spot 1대 축소(실제 scale-in). spot_a 우선 회수(실제 q_learning.py 순서와 동일)."""
+        for pref in ("spot_a", "spot_b"):
+            for wid, w in list(self.workers.items()):
+                if w["type"] == pref and w["status"] == "IDLE":
+                    del self.workers[wid]
+                    return
 
 
 def train_offline(episodes=50000, cost_model_path=None):
@@ -274,11 +376,9 @@ def train_offline(episodes=50000, cost_model_path=None):
     solvent_episodes = 0
 
     for ep in range(1, episodes + 1):
-        state = env.reset()
+        env.reset()
         for _ in range(400):  # 에피소드당 최대 400틱 (예산 고갈 동역학을 겪기에 충분한 길이)
-            actions = env.available_actions()
-            action = agent.choose_action(state, actions)
-            state, done = env.step(state, action)
+            done = env.step()
             if done:
                 break
 
