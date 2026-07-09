@@ -16,14 +16,14 @@ WE-MEET/
   │     ├── cluster_manager.py   # [인프라] WSL2 리소스 가드 및 Docker SDK 스케일 제어
   │     ├── scheduler/           # 스케줄러 계층 패키지
   │     │     ├── __init__.py
-  │     │     ├── core.py        # 중앙 스케줄러 스레드 루프 (Backfilling·Map-Merge·DEAD 복구 탑재)
-  │     │     ├── utils.py       # 태스크 실행/복구·FedAvg 병합·체크포인트 정리 유틸
+  │     │     ├── scheduler_daemon.py # 중앙 스케줄러 스레드 루프 (Backfilling·Map-Merge·DEAD 복구 탑재)
+  │     │     ├── task_executor.py    # 태스크 실행/복구·FedAvg 병합·체크포인트 정리 유틸
   │     │     ├── static.py      # Static (정적 룰 스텝) 스케줄러
   │     │     └── dynamic.py     # Dynamic (동적 부하 스텝) 스케줄러 [기본 구동 모드]
   │     ├── q_learning/          # 지능형 의사결정 Q-Learning 패키지
   │     │     ├── __init__.py
   │     │     ├── agent.py       # Q-Learning Agent 클래스 (6-Action·보상 수식 탑재)
-  │     │     ├── scheduler.py   # Q-Learning 의사결정 스텝 스케줄러
+│     │     ├── state_features.py # Q-Learning 상태 특징(State Feature) 단일 산출 모듈
   │     │     ├── pretrain.py    # 오프라인 사전 학습(Q-Table 수렴) 시뮬레이터
   │     │     └── q_table.json   # 강화학습 경험 축적 파일
   │     └── dashboard/           # 모니터링 대시보드 웹 서비스 패키지
@@ -94,11 +94,11 @@ python worker/worker.py --id worker-1 --type on_demand --port 50052 --head-host 
 
 ## 🛠️ 주요 기능 요약
 
-1.  **3대 AI 모형 부하 시뮬레이션**: CNN(연산 지향), RNN(균형), LSTM(메모리 지향) 모형의 Epoch 연산 특징에 따른 물리 리소스 점유 시뮬레이터 구동. 에포크 시간은 `측정 연산시간 ÷ gpu_scale_factor`로 이기종 성능 편차를 재현.
-2.  **이기종 자원 격리 (cGroup)**: On-Demand / Spot-A / Spot-B 3종 노드의 CPU/MEM 자원을 격리(`cost_model.yaml`)하여 모형의 자원 압박 수준 실증. 스팟 확장 상한 `MAX_SPOT_SCALE = 7`.
-3.  **OS 스케줄링 기법 접목**: 선두 차단(HOL Blocking) 해결을 위한 **Backfilling** 스케줄러, 그리고 자원 기아(Starvation)를 방지하기 위한 **SLA 마감 패널티**(마감 초과 시 초당 −5.0) 및 상태 축 긴급도($u_{sla}$) 도입.
-4.  **탄력성 & 고가용성**: 하트비트 **3.0초** 단절 감시를 통한 노드 장애 격리, **Task Lineage 기반 복구**(장애 서브태스크 재큐잉 + 자동 스케일아웃) 메커니즘 제공.
+1.  **3대 AI 모형 부하 시뮬레이션**: CNN(연산 지향), RNN(균형), LSTM(메모리 지향) 모형의 Epoch 연산 특징에 따른 물리 리소스 점유 시뮬레이터 구동. 호스트의 **NVIDIA MPS(Multi-Process Service) 물리 CUDA 스레드 격리**(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`) 환경변수를 활용하여 하드웨어 수준에서 이기종 성능 편차를 재현.
+2.  **이기종 자원 격리 (cGroup & MPS)**: On-Demand / Spot-A / Spot-B 3종 노드의 CPU/MEM 자원 및 GPU MPS 스펙을 `cost_model.yaml`에 정의하여 격리. 호스트 물리 RAM 감지에 따라 **스팟 확장 상한(MAX_SPOT_SCALE)을 동적으로 조절**하며, 스펙 설정을 동적으로 로드 및 주입.
+3.  **OS 스케줄링 기법 접목**: 선두 차단(HOL Blocking) 해결을 위한 **Backfilling** 스케줄러, 그리고 자원 기아(Starvation)를 방지하기 위해 마감 초과 시 초당 −5.0의 누적 감점을 부여하는 **SLA 마감 패널티** 및 6차원 상태 공간 내 긴급도 버킷(`sla_bucket`) 도입.
+4.  **탄력성 & 고가용성**: 하트비트 **3.0초** 단절 감시(송신 주기 5.0초와의 오탐 트레이드오프 고려)를 통한 노드 장애 격리, **Task Lineage 기반 복구**(장애 서브태스크 재큐잉 + 자동 스케일아웃) 메커니즘 제공.
 5.  **GCS 상태 영속화 (Checkpointing)**: 대기열·태스크 상태·Lineage·예산 등을 `data/gcs_state.json`에 저장하여 Head 재시작 시 중단 지점부터 투명 리플레이(2026-07-04).
 6.  **체크포인트 이어서 재개 (Skip / Re-execution)**: 완료된 산출물(`final_*.pt`)은 건너뛰고, 중간 체크포인트(`checkpoint_*_epoch_*.pt`)가 있으면 최신 에포크부터 남은 만큼만 재학습하여 복구 오버헤드 최소화.
 7.  **FedAvg 분산 병합 (Map-Merge)**: 큰 태스크를 최대 3개 Map으로 분할 후 MERGE(FedAvg) 단계에서 가중치를 수학적으로 병합하고 `[FedAvg Verification]` 검증 결론을 대시보드에 노출.
-8.  **비용-SLA 트레이드오프 학습**: 요금·마감·co-scheduling을 반영한 보상으로 Q-Learning 에이전트가 적시 스케일인/아웃을 학습. *(상시 초당 과금 모델은 설계 완료, 현 활성 경로에서는 비활성 상태 — 상세: `project_proposal.md` §8)*
+8.  **비용-SLA 트레이드오프 학습**: 요금·마감·co-scheduling을 반영한 보상으로 Q-Learning 에이전트가 적시 스케일인/아웃을 학습. AWS/GCP처럼 가동 중인 노드의 요금을 초 단위로 환산하여 매 0.2초 의사결정 루프마다 가상 예산(초기값 $1.5)에서 실시간 감산하는 **실시간 비용 청구 모델이 완비되어 가동 중**입니다.

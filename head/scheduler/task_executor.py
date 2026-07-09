@@ -26,7 +26,14 @@ from common.failure_simulator import FailureSimulator
 # - scheduler.py와 scheduler/core.py가 각각 생성하던 에이전트를 공통 유틸로 통합하여 
 #   비용 모델과 학습 Q-Table 인스턴스의 메모리 정합성 및 일관성을 확보합니다.
 COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../common/cost_model.yaml'))
-agent = QLearningAgent(cost_model_path=COST_MODEL_PATH, decay_rate=0.999, epsilon_min=0.10)
+agent = QLearningAgent(cost_model_path=COST_MODEL_PATH, decay_rate=0.999, epsilon_min=0.05)
+
+# 온라인 훈련 모드(Q_LEARNING_TRAINING_MODE = True)인 경우, 기학습된 Q-Table 지식은 유지하되
+# 실전 탐험을 처음부터 충분히 수행하도록 Epsilon을 1.0으로 강제 초기화하여 기동합니다.
+if getattr(gcs_state, "Q_LEARNING_TRAINING_MODE", False):
+    agent.epsilon = 1.0
+    agent.save_q_table()
+    print(f"[Q-Learning Online Train Init] 온라인 훈련용 Epsilon을 1.0으로 강제 리셋하여 웜스타트 탐험을 시작합니다. (하한: {agent.epsilon_min})")
 
 def log_benchmark_metric(scheduler_mode, task_id, model_type, status, execution_time, cost, delay, virtual_budget):
     """

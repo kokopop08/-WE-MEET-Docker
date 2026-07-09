@@ -1,8 +1,8 @@
 # Baby Ray 프로젝트 수행계획서 및 기술제안서 (통합 개편본)
 
-본 문서는 이기종 가상 클러스터 기반 ML 분산 학습 제어 엔진인 **WE-MEET**의 프로젝트 수행 계획과 기술 설계 명세서입니다. 탄력적인 가상 클라우드 인프라의 요금제 및 이질성을 활용하여, OOM 병목을 회피하고 가용 비용 대비 분산 학습 Throughput을 자동 극대화하는 탄력적 지능형 제어 엔진을 목표로 정립하였습니다. 기존 수행 계획 및 구현 리스트와 일정을 보존한 상태에서, OS 스케줄링 기법 및 4차원 상태 공간 Q-Learning 설계를 보완하여 재정립하였습니다.
+본 문서는 이기종 가상 클러스터 기반 ML 분산 학습 제어 엔진인 **WE-MEET**의 프로젝트 수행 계획과 기술 설계 명세서입니다. 탄력적인 가상 클라우드 인프라의 요금제 및 이질성을 활용하여, OOM 병목을 회피하고 가용 비용 대비 분산 학습 Throughput을 자동 극대화하는 탄력적 지능형 제어 엔진을 목표로 정립하였습니다. 기존 수행 계획 및 구현 리스트와 일정을 보존한 상태에서, OS 스케줄링 기법 및 6차원 상태 공간 Q-Learning 설계를 보완하여 재정립하였습니다.
 
-> 📌 **정합화 기준(2026-07-04)**: 본 [Part 2] 기술제안서의 수치·규격은 07-03 / 07-04 패치가 반영된 **실제 소스 코드를 기준(source of truth)**으로 재검증·갱신되었습니다. 설계 의도와 현 구현이 다른 지점(예: §8 초당 과금)은 별도 ⚠️ 표기로 명시했습니다.
+> 📌 **정합화 기준(2026-07-09)**: 본 [Part 2] 기술제안서의 수치·규격은 07-09 패치가 반영된 **실제 소스 코드를 기준(source of truth)**으로 재검증·갱신되었습니다. 
 
 ---
 
@@ -13,16 +13,16 @@
 *   학습 모델(CNN, RNN, LSTM)의 고유한 자원 요구도 특성에 대응하여 물리적인 자원 격리를 시연하고 최적의 가변 요금제(Spot 요금제) 스케줄링 정책을 학습해 냄으로써 실제 분산 컴퓨팅 런타임의 최적 자원 배분 메커니즘을 증명하는 것을 최종 목표로 합니다.
 
 ## 2. 주요 추진 목표 및 핵심 구현 리스트
-*   **이기종 가상 성능 시뮬레이션**: 단일 호스트(RTX 4060 Laptop) 내에서 `torch.cuda.synchronize()` 후 `gpu_scale_factor`에 반비례한 인위적 지연(`sleep`)을 삽입하여 성능 편차 구현. (실제 지연식은 [Part 2] §7 참조)
+*   **이기종 가상 성능 시뮬레이션**: 단일 호스트(RTX 4060 Laptop) 내에서 인위적인 소프트웨어 `sleep` 지연 대신, 호스트의 **NVIDIA MPS(Multi-Process Service) 물리 CUDA 스레드 할당 격리**(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`) 환경변수를 활용하여 노드별 물리 성능 편차 구현. (상세 내역은 [Part 2] §7 참조)
     *   **Worker-1**: On-Demand (Scale 1.0, CPU 2.0 Cores, Mem 2GB, 상시 고정 노드)
     *   **Worker-2~N**: Spot-A (Scale 0.6, CPU 1.0 Core, Mem 1GB) 및 Spot-B (Scale 0.3, CPU 0.5 Core, Mem 512MB) — 동적 스케일아웃으로 확장되며 컨테이너 번호(index)를 재사용.
-    *   **스팟 확장 상한**: 코드 상수 `MAX_SPOT_SCALE = 7`(`head/scheduler/core.py`)로 제한합니다. 단, 상한 카운트는 현재 `spot_a` 대수만 집계(`get_current_spot_scale()`)하므로 `spot_a`/`spot_b` 혼합 상황에서는 총 스팟 대수가 7을 초과할 수 있습니다. (설계 목표였던 "최대 30대" 대비 현 구현은 7대 상한)
+    *   **스팟 확장 상한**: 호스트 물리 RAM 용량을 감지하여 **동적으로 스케일 상한(MAX_SPOT_SCALE)을 조절**(`resource_guard.get_recommended_max_spot_scale()`, 하한값 5)하며, `scheduler_daemon.py`에서 관장. 단, 상한 카운트는 현재 `spot_a` 대수만 집계(`get_current_spot_scale()`)하므로 `spot_a`/`spot_b` 혼합 상황에서는 총 스팟 대수가 상한을 초과할 수 있습니다.
 *   **3대 머신러닝 워크로드 구성**:
     *   **이미지 분류 (CNN)**: SimpleCNN (GPU 연산 집약형, Spot 절감 검증용)
     *   **시계열 예측 (RNN)**: SimpleRNN (CPU/GPU 균형 연산형, 노드 이종성 검증용)
     *   **자연어 처리 (LSTM)**: SimpleLSTM (메모리 집약형, cGroup 제한 측정용)
 *   **Task Lineage DAG 기반 장애 자가 복구**:
-    *   Heartbeat 3초 미수신 시 DEAD 판정 ➔ GCS의 Task Lineage DAG 분석 ➔ 의존 하위 태스크 식별 ➔ 최신 체크포인트부터 학습 재개 및 Auto Scale-out 연동.
+    *   Heartbeat 3.0초 미수신 시 DEAD 판정 ➔ GCS의 Task Lineage DAG 분석 ➔ 의존 하위 태스크 식별 ➔ 최신 체크포인트부터 학습 재개 및 Auto Scale-out 연동. (하트비트 송신 주기 5.0초와 판정 임계치 3.0초의 동작 현황 그대로 유지하여 스팟 Eviction에 기민하게 대응)
 *   **고가용성 및 클러스터 안전 가드 장치 (Fault-Tolerance & Guard Systems)**:
     *   **비동기 좀비 컨테이너 클리너 (Async GCS Cleaner)**: Head Node 초기 구동 시, 호스트에 잔존하던 과거의 비정상 종료 Spot 컨테이너 잔해를 검출하여 **비동기 데몬 스레드로 백그라운드 소거**. gRPC 소켓 바인딩 및 서비스 시작을 차단하던 구버전 삭제 딜레이(3초 블로킹 병목)를 해결.
     *   **호스트 물리 메모리 Guard (Host Memory Guard)**: 스케일아웃 기동 시 `psutil.virtual_memory().percent`로 호스트 물리 메모리 사용률을 측정하여 **사용률이 85.0%를 초과**하면 추가 컨테이너 배포를 거부·보류하여 호스트 OS의 OOM 붕괴를 방지합니다. WSL2 환경에서는 컨테이너 내부 `free -b` 측정치와 비교하여 더 큰 사용률을 채택(보수적 판정)합니다. 환경변수 `BYPASS_RESOURCE_GUARD=1` 설정 시 이 가드를 단락(short-circuit) 우회합니다. (`head/cluster_manager.py:is_host_resource_sufficient`)
@@ -67,13 +67,14 @@ GCS(Global Control Store)는 분산 컴퓨팅의 모든 메타데이터(노드 �
 ```mermaid
 graph TD
     subgraph Head Node
-        Scheduler["Q-Learning 스케줄러 (4D + OS 이론)"] <--> GCS["GCS (Global Control Store)"]
-        ScaleManager["Dynamic Worker Manager"] -->|Docker SDK| Containers["Worker Containers (cgroup 격리)"]
+        Scheduler["Q-Learning 스케줄러 (6D + OS 이론)"] <--> GCS["GCS (Global Control Store)"]
+        GCS <-->|Save/Load 영속화| GCSDisk["data/gcs_state.json"]
+        ScaleManager["Dynamic Worker Manager"] -->|Docker SDK cGroup & NVIDIA MPS 동적 주입| Containers["Worker Containers (cgroup & MPS 격리)"]
     end
     
     subgraph Worker Nodes
         W1["Worker-1 (On-Demand)"] <-->|gRPC & Heartbeat| Scheduler
-        W2["Worker-2~N (Spot-A / Spot-B, MAX_SPOT_SCALE=7 동적 확장)"] <-->|gRPC & Heartbeat| Scheduler
+        W2["Worker-2~N (Spot-A / Spot-B, MAX_SPOT_SCALE 동적 확장)"] <-->|gRPC & Heartbeat| Scheduler
     end
     
     GCS <-->|Lineage & 상태 공유| Scheduler
@@ -85,113 +86,95 @@ graph TD
 
 ### 가. 프로토콜 타임아웃 및 메트릭 전송 수치 정의
 1.  **Heartbeat 전송 주기**: 모든 활성 Worker는 **5.0초** 간격(`common/config.py:DEFAULT_HEARTBEAT_INTERVAL = 5.0`)으로 Head Node에 자신의 CPU/Memory 자원 사용률을 포함한 상태 패킷을 송신합니다.
-2.  **생존 유실 판정 임계치 (Heartbeat Timeout)**: Head Node가 특정 Worker로부터 **3.0초** 동안 Heartbeat를 수신하지 못하면, 해당 노드를 `DEAD` 상태로 간주하고 장애 복구 프로토콜을 수행합니다(`head/scheduler/core.py:check_and_cleanup_dead_workers`). 단, `worker-1`(`on_demand`) 고정 노드는 DEAD 판정 대상에서 영구 제외합니다.
-    *   ⚠️ **설계상 유의점**: 송신 주기(5.0초)가 판정 임계치(3.0초)보다 길어, 실제 생존한 스팟 노드도 순간적으로 DEAD로 오탐될 여지가 있습니다. 이는 스팟 Eviction을 빠르게 감지(§6)하려는 3.0초 규격과 5.0초 송신 주기 사이의 튜닝 산물로, 향후 송신 주기 단축 또는 임계치 상향으로 정합화할 여지가 있습니다.
-3.  **태스크 할당 및 수거 지연**: gRPC 호출(`AssignTask`/`GetTaskStatus`)에는 **명시적 deadline을 설정하지 않으며**, 대신 스케줄러의 폴링 루프(단일 태스크 1.5초, 맵/머지 서브태스크 1.0초 주기)와 매 폴링 시 GCS 워커 레지스트리 생존 재확인으로 유실을 감지합니다. 워커가 레지스트리에서 사라지면 `grpc.RpcError`를 유발하여 작업을 대기열 선두(`insert(0, task)`)로 즉시 롤백합니다.
+2.  **생존 유실 판정 임계치 (Heartbeat Timeout)**: Head Node가 특정 Worker로부터 **3.0초** 동안 Heartbeat를 수신하지 못하면, 해당 노드를 `DEAD` 상태로 간주하고 장애 복구 프로토콜을 수행합니다(`head/scheduler/scheduler_daemon.py:check_and_cleanup_dead_workers`). 단, `worker-1`(`on_demand`) 고정 노드는 DEAD 판정 대상에서 영구 제외합니다.
+    *   ⚠️ **설계상 유의점 (코드 기준)**: 송신 주기(5.0초)가 판정 임계치(3.0초)보다 길어, 실제 생존한 스팟 노드도 순간적으로 DEAD로 오탐될 여지가 있습니다. 이는 스팟 Eviction을 3초 이내로 대단히 기민하게 감지하고 장애 자가 복구를 즉시 구동하기 위해 의도된 트레이드오프 설계 방식입니다.
+3.  **태스크 할당 및 수거 지연**: gRPC 호출(`AssignTask`/`GetTaskStatus`)에는 **명시적 deadline을 설정하지 않으며**, 대신 스케줄러의 **0.2초 고속 의사결정 루프(High-Frequency Scheduling)**와 매 틱(5틱마다 1회인 1초 주기)마다 GCS 워커 레지스트리 생존 재확인으로 유실을 감지합니다. 워커가 레지스## 5. 6차원 상태 공간(State Space) 및 OS 스케줄링 이론 접목
 
-### 나. Protobuf 인터페이스 규격 (`proto/babyray.proto`)
+Q-Learning 에이전트의 상태 변별력을 극대화하여 실제 시스템상의 병목 현상을 방지하도록 수학 모델을 6차원으로 고도화합니다. 모든 스케줄링 상태는 [state_features.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/head/q_learning/state_features.py)에서 유일하고 동기화된 방식으로 산출됩니다.
 
-> 아래 스냅샷은 실제 컴파일 대상 `proto/babyray.proto`와 1:1로 동기화된 최신본입니다. (컴파일 스크립트: 루트의 `compile_proto.py`)
+### 가. 6차원 상태 공간 공식 정의
 
-```protobuf
-syntax = "proto3";
+에이전트가 참조하는 상태는 아래 6개 이산 축의 튜플입니다.
 
-package babyray;
+$$State = (q\_bucket,\; head\_model,\; a\_mix,\; sla\_bucket,\; danger\_phase,\; budget\_level)$$
 
-service BabyRayService {
-  // Worker -> Head: Worker 등록 및 제거(생명주기 관리)
-  rpc RegisterWorker (RegisterRequest) returns (RegisterResponse);
-  rpc DeregisterWorker (DeregisterRequest) returns (DeregisterResponse);
+1.  **`q_bucket` (대기열 적체 깊이)** ∈ `{0, 1, 2, 3}`: 큐의 태스크 적체량에 따른 버킷 분류.
+    *   `0`: 빈 큐 (적체량 0)
+    *   `1`: 경적체 (적체량 1 ~ 3)
+    *   `2`: 중적체 (적체량 4 ~ 7)
+    *   `3`: 과적체 (적체량 8 이상) ➔ 대기열 캐스케이드(Cascade) 폭발 방지 지표
+2.  **`head_model` (선두 실행가능 태스크 성격)** ∈ `{0, 1}`: GCS 큐 최선두에 대기 중인(의존성이 충족된) 태스크의 성격 분류.
+    *   `0`: 연산 집약형 (CNN, MERGE 또는 태스크 없음)
+    *   `1`: 메모리 집약형 (RNN, LSTM) ➔ 노드별 용량 초과 OOM 회피 라우팅용
+3.  **`a_mix` (유휴 노드 활성 비트맵)** ∈ `{0 … 7}`: 현재 IDLE 상태로 배정이 가용한 노드 풀의 조합을 3비트로 인코딩.
+    *   $$a\_mix = (\text{on\_demand idle}) \cdot 1 + (\text{spot\_a idle}) \cdot 2 + (\text{spot\_b idle}) \cdot 4$$
+4.  **`sla_bucket` (SLA 마감 완급)** ∈ `{0, 1, 2}`: 선두 태스크의 마감 기한까지 남은 시간(`time_left = deadline - now`) 기준 버킷.
+    *   `0`: 여유 (30.0초 초과)
+    *   `1`: 중간 (10.0초 초과 ~ 30.0초 이하)
+    *   `2`: 임박 (10.0초 이하)
+5.  **`danger_phase` (스팟 회수 위험구간 여부)** ∈ `{0, 1}`: 30초의 회수 위험 주기 중 현재가 강제 선점 위험구간에 진입해 있는가에 대한 플래그.
+    *   `0`: 안전 구간 (30초 중 뒤 20초)
+    *   `1`: 위험 구간 (30초 중 앞 10초) ➔ 스팟 회수 룰렛 타이밍 회피 지표
+6.  **`budget_level` (잔여 가상 예산 수준)** ∈ `{0, 1, 2}`: 가상 예산의 잔여 수준에 따른 레벨화.
+    *   `0`: 예산 위험 ($0.7 미만)
+    *   `1`: 예산 낮음 ($3.0 미만)
+    *   `2`: 예산 여유 ($3.0 이상)
 
-  // Worker -> Head: 주기적 생존 신고 및 자원 상태 전송
-  rpc SendHeartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+### 가-2. 행동 공간(Action Space) 정의 및 행동 마스킹 (Action Masking)
 
-  // Head -> Worker: 작업 할당 및 상태 모니터링
-  rpc AssignTask (TaskAssignment) returns (TaskResult);
-  rpc GetTaskStatus (TaskStatusRequest) returns (TaskStatusResponse);
+Q-Learning 에이전트는 다음 6개 행동 중 하나를 선택합니다(`head/q_learning/agent.py:self.actions = [0..5]`).
 
-  // Head -> Worker: cGroup 자원 격리 한도 동적 변경
-  rpc ResizeResources (ResizeRequest) returns (ResizeResponse);
-}
+| Action | 의미 | 비고 |
+| :--- | :--- | :--- |
+| `0` | ASSIGN_ON_DEMAND | On-Demand 노드에 배정 |
+| `1` | ASSIGN_SPOT_A | Spot-A 노드에 배정 |
+| `2` | ASSIGN_SPOT_B | Spot-B 노드에 배정 |
+| `3` | HOLD | 배정 보류(대기) |
+| `4` | SCALE_OUT_SPOT_A | Spot-A 스케일아웃 (큐 $\ge 6$이면 2대) |
+| `5` | SCALE_OUT_SPOT_B | Spot-B 스케일아웃 (큐 $\ge 6$이면 2대) |
 
-message RegisterRequest {
-  string worker_id = 1;
-  string node_type = 2; // on_demand, spot_a, spot_b
-  int32 port = 3;
-}
-message RegisterResponse {
-  bool success = 1;
-  string message = 2;
-}
+#### 🛡️ 행동 마스킹 안전 가드 정책 (Action Masking)
+실제 구동 환경에서 치명적인 크래시나 자원 고갈을 방지하기 위해 가용한 행동 공간을 동적으로 한정(마스킹)합니다:
+*   **예산 고갈 마스킹**: 가상 예산이 고갈($\le 0.0$)되었을 경우, 고비용 작업인 On-Demand 배정(Action `0`) 및 Spot-A/B 스케일아웃(Action `4`, `5`)을 선택할 수 없도록 강제 차단합니다.
+*   **물리 자원 부족 마스킹**: 호스트 물리 메모리 가드([cluster_manager.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/head/cluster_manager.py))에 의해 물리 리소스가 부족(메모리 사용률 85% 초과 등)하다고 감지되면 Spot 스케일아웃(Action `4`, `5`)을 마스킹하여 호스트 붕괴를 방지합니다.
+*   **마감 임박 HOLD 억제 마스킹**: 선두 태스크의 마감이 10초 이하(`sla_bucket = 2`)로 임박하고 배정 가능한 유휴 노드가 1대라도 있을 경우, HOLD(Action `3`)를 행동 풀에서 지워 Starvation을 원천 차단하고 즉시 배정을 유도합니다.
+*   **Cold Start 지연 마스킹**: 컨테이너가 생성(LAUNCHING)되었으나 아직 Head GCS 레지스트리에 등록되지 않은 스팟 노드가 존재할 경우 추가적인 동적 증설(Action `4`, `5`)을 일시 제한하여 중복 오버헤드를 막습니다.
 
-message DeregisterRequest {
-  string worker_id = 1;
-}
-message DeregisterResponse {
-  bool success = 1;
-  string message = 2;
-}
+### 나. 운영체제(OS) 스케줄링 기법의 결합 및 극복
 
-message HeartbeatRequest {
-  string worker_id = 1;
-  float cpu_utilization = 2;
-  float memory_utilization = 3;
-}
-message HeartbeatResponse {
-  bool ack = 1;
-}
+#### 1) Backfilling (비순차 스케줄링) 을 통한 HOL Blocking 극복
+*   **문제**: 큐 선두의 LSTM 작업이 가용 On-Demand 자원이 없어 대기할 때, 후순위의 CNN 작업이 비어 있는 Spot-A 노드를 활용하지 못하고 대기열에서 노는 병목 발생.
+*   **해법**: 스케줄러 루프 내에 **Backfilling 알고리즘**을 결합합니다. 최선두 태스크 배정이 보류될 경우, 큐 내부를 후방 탐색하여 현재 비어 있는 Spot-A 노드 스펙에 딱 맞는 CNN 작업을 선제 배정하여 클러스터 가동률을 극대화합니다.
 
-message TaskAssignment {
-  string task_id = 1;
-  string model_type = 2;   // CNN, RNN, LSTM, MERGE
-  string dataset_path = 3; // 일반 경로 또는 "merge:<path1>,<path2>,..." (FedAvg 병합 입력)
-  int32 epochs = 4;
-}
-message TaskResult {
-  string task_id = 1;
-  string status = 2;        // RUNNING, SUCCESS, FAILED
-  float execution_time = 3; // 초기 접수 시 0.0
-  string message = 4;
-}
+#### 2) SLA 마감 패널티를 통한 Starvation 극복 및 지연 보상 (Delayed Reward)
+*   **문제**: 강화학습 에이전트가 예산 보존(Reward 상승)을 위해 무겁고 요금이 비싼 RNN/LSTM 작업을 무한정 보류(Action `3`: HOLD)시키는 기아(Starvation) 현상이 발생할 수 있습니다.
+*   **해법 (실제 구현, `head/q_learning/agent.py:calculate_reward`)**: 배정 시점에 성급한 낙관적 보상을 주는 방식 대신, 실제 태스크가 완료되거나 회수/OOM으로 실패하는 시점에 해당 배정의 상태-행동 쌍에 보상을 소급 귀속하는 **지연 보상(Delayed Reward Credit Assignment) 경로**를 활성화합니다.
+    $$Reward = R_{success} - C_{cost} - P_{makespan} - P_{delay} - P_{evicted} + R_{co\text{-}sched}$$
 
-message TaskStatusRequest {
-  string task_id = 1;
-}
-message TaskStatusResponse {
-  string status = 1;   // RUNNING, SUCCESS, FAILED
-  float progress = 2;  // 0.0 ~ 100.0 (%)
-  string logs = 3;     // 누적된 가상 에포크별 로그(FedAvg 검증 로그 포함)
-}
+    | 항 | 가중치 상수 | 설명 |
+    | :--- | :--- | :--- |
+    | $R_{success}$ | `SUCCESS_REWARD = 20.0` | 태스크 성공 완료 시 부여 |
+    | $C_{cost}$ | `COST_WEIGHT = 1000.0` | 시간 환산 요금 체감 감점을 위해 $1000.0 \times (cost \times time / 3600)$ 차감 |
+    | $P_{makespan}$ | `MAKESPAN_WEIGHT = 0.5` | 마감 초과 여부와 무관하게 '느림' 자체에 대가 부과 ($0.5 \times execution\_time$) |
+    | $P_{delay}$ | `DELAY_PENALTY_WEIGHT = 5.0` | 마감 기한 초과분에 대해 **초당 −5.0**의 지연 페널티 부과 |
+    | $P_{evicted}$ | `EVICTION_PENALTY = 25.0` | 스팟 노드가 강제 회수(Eviction)되어 실패한 경우 부과되는 벌점 |
+    | $R_{co\text{-}sched}$ | 융합(상보 자원) 시 **+0.15** / 경합(동일 자원) 시 **−0.20** | 이종 모형 동거 시의 조화도 추가/감점 |
 
-message ResizeRequest {
-  float cpu_cores = 1;    // 조정할 CPU 코어 수
-  int64 memory_bytes = 2; // 조정할 메모리 한도(bytes)
-}
-message ResizeResponse {
-  bool success = 1;
-  string message = 2;
-}
-```
+*   **Starvation 방어**: 마감을 초과하면 $P_{delay}$(초당 −5.0)가 기하급수적으로 누적되어 무한 보류 행동을 강력하게 억제합니다. 또한 GCS에서 대체 자원으로 재큐잉되는 서브태스크에는 `deadline = now + 20.0초`가 재부여되어 빠른 수렴을 유도합니다.
 
-> **변경 이력**: 초기 4-RPC 규격 대비 ①노드 정상 퇴장을 위한 `DeregisterWorker`, ②cGroup 한도 동적 변경용 `ResizeResources`가 추가되었고, `TaskResult.message`(접수 사유)·`TaskStatusResponse.logs`(에포크 로그) 필드와 `spot_b` 노드 타입, `MERGE` 모델 타입(FedAvg)이 반영되었습니다.
-
----
-
-## 3. 리눅스 커널 cgroup 기반 이기종 자원 격리 및 WSL2 가용성 가드
-
-이기종 클러스터의 물리 성능 편차와 격리 안정성을 실증하기 위해 Docker의 cGroup 제한을 세분화하여 정의합니다.
-
-### 가. 노드별 물리 자원 격리 스펙 및 요금 모델 (`common/cost_model.yaml`)
+#### 3) 학습 하이퍼파라미터 및 수렴 정책
+*   학습률 $\alpha = 0.1$, 할인율 $\gamma = 0.9$, 탐험률 $\epsilon$: 초기 `1.0` → 최소 `0.05`, 감쇠율 `decay_rate = 0.995`.
+*   ⚠️ **유의점**: 저장된 Q-Table(비어있지 않음)을 로드하면 $\epsilon$이 즉시 최소값(0.05)으로 강제 설정되어, 사전 학습 이후 실환경 구동은 사실상 **탐욕적(greedy)** 정책에 가깝게 동작합니다.el.yaml`)
 
 | 노드 타입 | `cpu_limit` | `memory_limit_mb` | `cost_per_hour` | `gpu_scale_factor` | `preemption_probability` |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **On-Demand** (기본 코어 노드) | 2.0 | 2048 | **$0.710/hr** | 1.0 | 0.0 |
-| **Spot-A** (연산형 가속 노드) | 1.0 | 1024 | **$0.220/hr** | 0.6 | 0.3 |
-| **Spot-B** (최소 경량 노드) | 0.5 | 512 | **$0.090/hr** | 0.3 | 0.7 |
+| **On-Demand** (기본 코어 노드) | 2.0 | 2048 | **$7.10/hr** | 1.0 | 0.0 |
+| **Spot-A** (성능 지향 가속 노드) | 1.0 | 1024 | **$2.20/hr** | 0.6 | 0.30 |
+| **Spot-B** (안정 지향 경량 노드) | 0.5 | 512 | **$0.90/hr** | 0.3 | 0.10 |
 
-*   On-Demand는 가장 안정적이며 preemption이 없고, Spot-A는 GPU 가속 위주의 중간 요금, Spot-B는 가장 저렴하나 중단 확률(0.7)이 높은 최경량 노드입니다.
-*   초기 가상 예산은 **$10.0**(`head/state.py:virtual_budget`)로 설정되어 있으며, 실제 퍼블릭 클라우드 요율과의 밸런싱을 위해 조정된 값입니다.
-*   ⚠️ **구현 유의점**: 컨테이너 실제 기동 시 `scale_out_worker()`는 요금표의 자원 크기와 동일한 값을 **하드코딩**(`spot_a`: `nano_cpus=1e9`, `mem_limit="1024m"` 등)으로 적용하며 YAML을 직접 읽지 않습니다. 또한 Q-Learning 에이전트는 YAML 로드 실패 시 **폴백 요금**($1.0/0.4/0.2)을 사용하므로, 요금표 정합성 유지가 중요합니다.
+*   On-Demand는 가장 안정적이며 preemption이 없고, Spot-A는 60% GPU 성능 격리를 지원하는 중간 요금의 휘발성 노드이며, Spot-B는 가장 저렴하고 회수율(0.10)이 매우 낮아 안정적인 극가성비 최경량 노드입니다.
+*   초기 가상 예산은 **$1.5**(`head/state.py:INITIAL_VIRTUAL_BUDGET`)로 설정되어 있습니다. (실제 벤치마크 시나리오 상에서 비용 축의 예산 고갈을 체감할 수 있도록 현실화된 단가)
+*   **cGroup & MPS 동적 로드**: 컨테이너 실제 기동 시 `cluster_manager.py`의 `scale_out_worker()`는 하드코딩 대신 `_load_node_config()` 헬퍼를 통해 `common/cost_model.yaml` 명세를 **동적으로 로드**하여 `nano_cpus` 및 `mem_limit`, 그리고 NVIDIA MPS 스레드 제한(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`)을 컨테이너 생성 시 동적 주입합니다.
 
 ### 나. WSL2 / Docker RAM 안전 모니터링 가드
 Windows 호스트 시스템에서 WSL2가 램을 임의 점유하여 전체 OOM을 유발하는 문제를 막기 위해, 클러스터 매니저는 스케일 아웃 지시 전 호스트 메모리 사용률을 측정합니다.
@@ -203,13 +186,125 @@ Windows 호스트 시스템에서 WSL2가 램을 임의 점유하여 전체 OOM�
 
 ## 4. 3대 스케줄러 메커니즘 특성 비교
 
-| 비교 항목 | Static 스케줄러 모드 | Dynamic 스케줄러 모드 | Q-Learning (4D + OS 이론) 스케줄러 모드 |
+| 비교 항목 | Static 스케줄러 모드 | Dynamic 스케줄러 모드 | Q-Learning (6D + OS 이론) 스케줄러 모드 |
 | :--- | :--- | :--- | :--- |
-| **의사결정 방식** | 큐 대기 크기 기준 정적 임계치 룰 | 노드 평균 자원(CPU/MEM) 부하 임계치 룰 | 4차원 상태 인지 및 행동 정책 기계 학습 |
-| **스케일 아웃 조건** | 큐 길이 $\ge 4$ → Spot-A 1대, $\ge 8$ → 2대 | (평균 CPU/MEM $\gt 70\%$) 또는 큐 $\ge 3$ → 1대, 큐 $\ge 8$ → 2대 | Action 4/5 선택 시 기동(큐 $\ge 6$이면 2대). 예산·요금·상태에 따라 학습된 정책으로 결정 |
+| **의사결정 방식** | 큐 대기 크기 기준 정적 임계치 룰 | 노드 평균 자원(CPU/MEM) 부하 임계치 룰 | 6차원 상태 인지 및 행동 정책 기계 학습 |
+| **스케일 아웃 조건** | 큐 길이 $\ge 2$ → Spot-A 1대, $\ge 6$ → 2대 | (평균 CPU/MEM $\gt 70\%$) 또는 큐 $\ge 3$ → 1대, 큐 $\ge 8$ → 2대 | Action 4/5 선택 시 기동(큐 $\ge 6$이면 2대). 예산·요금·위험구간 등에 따라 학습된 정책으로 결정 |
 | **스케일 인 조건** | 큐가 비고 유휴 타이머 $\ge 3.0$초 유지 | 큐가 비고 평균 CPU/MEM $\lt 20\%$ 가 $3.0$초 유지 | 유휴(IDLE) 스팟 노드가 감지된 상태가 $3.0$초 지속(Spot-A 우선 회수) |
 | **자원 효율성** | 낮음 (큐 크기만 보고 확장하므로 자원 낭비) | 보통 (실시간 자원 부하를 추적하여 분산함) | **높음** (모형의 성격에 맞춰 하드웨어 친화적 격리 배정) |
-| **Starvation 해결** | 없음 (FIFO 순차 처리로 인한 지연) | 없음 | **있음 (OS Aging 기법 결합)**: 임계 지연 시 강제 배정 |
+| **Starvation 해결** | 없음 (FIFO 순차 처리로 인한 지연) | 없음 | **있음 (SLA 지연 페널티 적용)**: 마감 초과 시 초당 −5.0 누적 감점 |
+| **선두 차단(HOL) 해결**| 없음 | 없음 | **있음 (OS Backfilling 결합)**: 후순위 태스크 우회 배정 |
+| **한계 및 단점** | 워크로드 폭증 시 유연한 대처 불가 | 일시적인 부하 요동에 따른 노드 플래핑(Flapping) | 학습 수렴 전까지 탐험(Exploration) 오버헤드 존재 |
+
+> **현재 기본 구동 모드**: `head/state.py:SCHEDULER_MODE = "dynamic"`. 즉 런타임 기본값은 Dynamic 스케줄러이며, Q-Learning 모드는 사전 학습(`head/q_learning/pretrain.py`)으로 수렴시킨 Q-Table을 로드하여 선택적으로 구동합니다. 세 모드 모두 공통 자원 가드(§3)와 Backfilling/장애 복구(§6)를 공유합니다.
+
+---
+
+## 5. 6차원 상태 공간(State Space) 및 OS 스케줄링 이론 접목
+
+Q-Learning 에이전트의 상태 변별력을 극대화하여 실제 시스템상의 병목 현상을 방지하도록 수학 모델을 6차원으로 고도화합니다. 모든 스케줄링 상태는 [state_features.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/head/q_learning/state_features.py)에서 유일하고 동기화된 방식으로 산출됩니다.
+
+### 가. 6차원 상태 공간 공식 정의
+
+에이전트가 참조하는 상태는 아래 6개 이산 축의 튜플입니다.
+
+$$State = (q\_bucket,\; head\_model,\; a\_mix,\; sla\_bucket,\; danger\_phase,\; budget\_level)$$
+
+1.  **`q_bucket` (대기열 적체 깊이)** ∈ `{0, 1, 2, 3}`: 큐의 태스크 적체량에 따른 버킷 분류.
+    *   `0`: 빈 큐 (적체량 0)
+    *   `1`: 경적체 (적체량 1 ~ 3)
+    *   `2`: 중적체 (적체량 4 ~ 7)
+    *   `3`: 과적체 (적체량 8 이상) ➔ 대기열 캐스케이드(Cascade) 폭발 방지 지표
+2.  **`head_model` (선두 실행가능 태스크 성격)** ∈ `{0, 1}`: GCS 큐 최선두에 대기 중인(의존성이 충족된) 태스크의 성격 분류.
+    *   `0`: 연산 집약형 (CNN, MERGE 또는 태스크 없음)
+    *   `1`: 메모리 집약형 (RNN, LSTM) ➔ 노드별 용량 초과 OOM 회피 라우팅용
+3.  **`a_mix` (유휴 노드 활성 비트맵)** ∈ `{0 … 7}`: 현재 IDLE 상태로 배정이 가용한 노드 풀의 조합을 3비트로 인코딩.
+    *   $$a\_mix = (\text{on\_demand idle}) \cdot 1 + (\text{spot\_a idle}) \cdot 2 + (\text{spot\_b idle}) \cdot 4$$
+4.  **`sla_bucket` (SLA 마감 완급)** ∈ `{0, 1, 2}`: 선두 태스크의 마감 기한까지 남은 시간(`time_left = deadline - now`) 기준 버킷.
+    *   `0`: 여유 (30.0초 초과)
+    *   `1`: 중간 (10.0초 초과 ~ 30.0초 이하)
+    *   `2`: 임박 (10.0초 이하)
+5.  **`danger_phase` (스팟 회수 위험구간 여부)** ∈ `{0, 1}`: 30초의 회수 위험 주기 중 현재가 강제 선점 위험구간에 진입해 있는가에 대한 플래그.
+    *   `0`: 안전 구간 (30초 중 뒤 20초)
+    *   `1`: 위험 구간 (30초 중 앞 10초) ➔ 스팟 회수 룰렛 타이밍 회피 지표
+6.  **`budget_level` (잔여 가상 예산 수준)** ∈ `{0, 1, 2}`: 가상 예산의 잔여 수준에 따른 레벨화.
+    *   `0`: 예산 위험 ($0.7 미만)
+    *   `1`: 예산 낮음 ($3.0 미만)
+    *   `2`: 예산 여유 ($3.0 이상)
+
+### 가-2. 행동 공간(Action Space) 정의 및 행동 마스킹 (Action Masking)
+
+Q-Learning 에이전트는 다음 6개 행동 중 하나를 선택합니다(`head/q_learning/agent.py:self.actions = [0..5]`).
+
+| Action | 의미 | 비고 |
+| :--- | :--- | :--- |
+| `0` | ASSIGN_ON_DEMAND | On-Demand 노드에 배정 |
+| `1` | ASSIGN_SPOT_A | Spot-A 노드에 배정 |
+| `2` | ASSIGN_SPOT_B | Spot-B 노드에 배정 |
+| `3` | HOLD | 배정 보류(대기) |
+| `4` | SCALE_OUT_SPOT_A | Spot-A 스케일아웃 (큐 $\ge 6$이면 2대) |
+| `5` | SCALE_OUT_SPOT_B | Spot-B 스케일아웃 (큐 $\ge 6$이면 2대) |
+
+#### 🛡️ 행동 마스킹 안전 가드 정책 (Action Masking)
+실제 구동 환경에서 치명적인 크래시나 자원 고갈을 방지하기 위해 가용한 행동 공간을 동적으로 한정(마스킹)합니다:
+*   **예산 고갈 마스킹**: 가상 예산이 고갈($\le 0.0$)되었을 경우, 고비용 작업인 On-Demand 배정(Action `0`) 및 Spot-A/B 스케일아웃(Action `4`, `5`)을 선택할 수 없도록 강제 차단합니다.
+*   **물리 자원 부족 마스킹**: 호스트 물리 메모리 가드([cluster_manager.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/head/cluster_manager.py))에 의해 물리 리소스가 부족(메모리 사용률 85% 초과 등)하다고 감지되면 Spot 스케일아웃(Action `4`, `5`)을 마스킹하여 호스트 붕괴를 방지합니다.
+*   **마감 임박 HOLD 억제 마스킹**: 선두 태스크의 마감이 10초 이하(`sla_bucket = 2`)로 임박하고 배정 가능한 유휴 노드가 1대라도 있을 경우, HOLD(Action `3`)를 행동 풀에서 지워 Starvation을 원천 차단하고 즉시 배정을 유도합니다.
+*   **Cold Start 지연 마스킹**: 컨테이너가 생성(LAUNCHING)되었으나 아직 Head GCS 레지스트리에 등록되지 않은 스팟 노드가 존재할 경우 추가적인 동적 증설(Action `4`, `5`)을 일시 제한하여 중복 오버헤드를 막습니다.
+
+### 나. 운영체제(OS) 스케줄링 기법의 결합 및 극복
+
+#### 1) Backfilling (비순차 스케줄링) 을 통한 HOL Blocking 극복
+*   **문제**: 큐 선두의 LSTM 작업이 가용 On-Demand 자원이 없어 대기할 때, 후순위의 CNN 작업이 비어 있는 Spot-A 노드를 활용하지 못하고 대기열에서 노는 병목 발생.
+*   **해법**: 스케줄러 루프 내에 **Backfilling 알고리즘**을 결합합니다. 최선두 태스크 배정이 보류될 경우, 큐 내부를 후방 탐색하여 현재 비어 있는 Spot-A 노드 스펙에 딱 맞는 CNN 작업을 선제 배정하여 클러스터 가동률을 극대화합니다.
+
+#### 2) SLA 마감 패널티를 통한 Starvation 극복 및 지연 보상 (Delayed Reward)
+*   **문제**: 강화학습 에이전트가 예산 보존(Reward 상승)을 위해 무겁고 요금이 비싼 RNN/LSTM 작업을 무한정 보류(Action `3`: HOLD)시키는 기아(Starvation) 현상이 발생할 수 있습니다.
+*   **해법 (실제 구현, `head/q_learning/agent.py:calculate_reward`)**: 배정 시점에 성급한 낙관적 보상을 주는 방식 대신, 실제 태스크가 완료되거나 회수/OOM으로 실패하는 시점에 해당 배정의 상태-행동 쌍에 보상을 소급 귀속하는 **지연 보상(Delayed Reward Credit Assignment) 경로**를 활성화합니다.
+    $$Reward = R_{success} - C_{cost} - P_{makespan} - P_{delay} - P_{evicted} + R_{co\text{-}sched}$$
+
+    | 항 | 가중치 상수 | 설명 |
+    | :--- | :--- | :--- |
+    | $R_{success}$ | `SUCCESS_REWARD = 20.0` | 태스크 성공 완료 시 부여 |
+    | $C_{cost}$ | `COST_WEIGHT = 1000.0` | 시간 환산 요금 체감 감점을 위해 $1000.0 \times (cost \times time / 3600)$ 차감 |
+    | $P_{makespan}$ | `MAKESPAN_WEIGHT = 0.5` | 마감 초과 여부와 무관하게 '느림' 자체에 대가 부과 ($0.5 \times execution\_time$) |
+    | $P_{delay}$ | `DELAY_PENALTY_WEIGHT = 5.0` | 마감 기한 초과분에 대해 **초당 −5.0**의 지연 페널티 부과 |
+    | $P_{evicted}$ | `EVICTION_PENALTY = 25.0` | 스팟 노드가 강제 회수(Eviction)되어 실패한 경우 부과되는 벌점 |
+    | $R_{co\text{-}sched}$ | 융합(상보 자원) 시 **+0.15** / 경합(동일 자원) 시 **−0.20** | 이종 모형 동거 시의 조화도 추가/감점 |
+
+*   **Starvation 방어**: 마감을 초과하면 $P_{delay}$(초당 −5.0)가 기하급수적으로 누적되어 무한 보류 행동을 강력하게 억제합니다. 또한 GCS에서 대체 자원으로 재큐잉되는 서브태스크에는 `deadline = now + 20.0초`가 재부여되어 빠른 수렴을 유도합니다.
+
+#### 3) 학습 하이퍼파라미터 및 수렴 정책
+*   학습률 $lpha = 0.1$, 할인율 $\gamma = 0.9$, 탐험률 $\epsilon$: 초기 `1.0` → 최소 `0.05`, 감쇠율 `decay_rate = 0.995`.
+*   ⚠️ **유의점**: 저장된 Q-Table(비어있지 않음)을 로드하면 $\epsilon$이 즉시 최소값(0.05)으로 강제 설정되어, 사전 학습 이후 실환경 구동은 사실상 **탐욕적(greedy)** 정책에 가깝게 동작합니다.el.yaml`)
+
+| 노드 타입 | `cpu_limit` | `memory_limit_mb` | `cost_per_hour` | `gpu_scale_factor` | `preemption_probability` |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **On-Demand** (기본 코어 노드) | 2.0 | 2048 | **$7.10/hr** | 1.0 | 0.0 |
+| **Spot-A** (성능 지향 가속 노드) | 1.0 | 1024 | **$2.20/hr** | 0.6 | 0.30 |
+| **Spot-B** (안정 지향 경량 노드) | 0.5 | 512 | **$0.90/hr** | 0.3 | 0.10 |
+
+*   On-Demand는 가장 안정적이며 preemption이 없고, Spot-A는 60% GPU 성능 격리를 지원하는 중간 요금의 휘발성 노드이며, Spot-B는 가장 저렴하고 회수율(0.10)이 매우 낮아 안정적인 극가성비 최경량 노드입니다.
+*   초기 가상 예산은 **$1.5**(`head/state.py:INITIAL_VIRTUAL_BUDGET`)로 설정되어 있습니다. (실제 벤치마크 시나리오 상에서 비용 축의 예산 고갈을 체감할 수 있도록 현실화된 단가)
+*   **cGroup & MPS 동적 로드**: 컨테이너 실제 기동 시 `cluster_manager.py`의 `scale_out_worker()`는 하드코딩 대신 `_load_node_config()` 헬퍼를 통해 `common/cost_model.yaml` 명세를 **동적으로 로드**하여 `nano_cpus` 및 `mem_limit`, 그리고 NVIDIA MPS 스레드 제한(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`)을 컨테이너 생성 시 동적 주입합니다.
+
+### 나. WSL2 / Docker RAM 안전 모니터링 가드
+Windows 호스트 시스템에서 WSL2가 램을 임의 점유하여 전체 OOM을 유발하는 문제를 막기 위해, 클러스터 매니저는 스케일 아웃 지시 전 호스트 메모리 사용률을 측정합니다.
+*   1차로 `psutil.virtual_memory().percent`(호스트 물리 메모리 사용률)를 측정하고, WSL2 환경에서는 컨테이너 내부 `free -b` 결과에서 산출한 사용률과 비교하여 **더 큰(더 보수적인) 값**을 채택합니다.
+*   채택 사용률이 **85.0%를 초과**할 경우, 추가적인 Spot 노드의 스케일 아웃을 선제적으로 거부하여 호스트의 안전을 가드합니다.
+*   개발/디버깅 목적으로 `BYPASS_RESOURCE_GUARD=1` 환경변수를 부여하면 이 가드를 단락 우회할 수 있습니다.
+
+---
+
+## 4. 3대 스케줄러 메커니즘 특성 비교
+
+| 비교 항목 | Static 스케줄러 모드 | Dynamic 스케줄러 모드 | Q-Learning (6D + OS 이론) 스케줄러 모드 |
+| :--- | :--- | :--- | :--- |
+| **의사결정 방식** | 큐 대기 크기 기준 정적 임계치 룰 | 노드 평균 자원(CPU/MEM) 부하 임계치 룰 | 6차원 상태 인지 및 행동 정책 기계 학습 |
+| **스케일 아웃 조건** | 큐 길이 $\ge 2$ → Spot-A 1대, $\ge 6$ → 2대 | (평균 CPU/MEM $\gt 70\%$) 또는 큐 $\ge 3$ → 1대, 큐 $\ge 8$ → 2대 | Action 4/5 선택 시 기동(큐 $\ge 6$이면 2대). 예산·요금·위험구간 등에 따라 학습된 정책으로 결정 |
+| **스케일 인 조건** | 큐가 비고 유휴 타이머 $\ge 3.0$초 유지 | 큐가 비고 평균 CPU/MEM $\lt 20\%$ 가 $3.0$초 유지 | 유휴(IDLE) 스팟 노드가 감지된 상태가 $3.0$초 지속(Spot-A 우선 회수) |
+| **자원 효율성** | 낮음 (큐 크기만 보고 확장하므로 자원 낭비) | 보통 (실시간 자원 부하를 추적하여 분산함) | **높음** (모형의 성격에 맞춰 하드웨어 친화적 격리 배정) |
+| **Starvation 해결** | 없음 (FIFO 순차 처리로 인한 지연) | 없음 | **있음 (SLA 지연 페널티 적용)**: 마감 초과 시 초당 −5.0 누적 감점 |
 | **선두 차단(HOL) 해결**| 없음 | 없음 | **있음 (OS Backfilling 결합)**: 후순위 태스크 우회 배정 |
 | **한계 및 단점** | 워크로드 폭증 시 유연한 대처 불가 | 일시적인 부하 요동에 따른 노드 플래핑(Flapping) | 학습 수렴 전까지 탐험(Exploration) 오버헤드 존재 |
 
@@ -265,7 +360,7 @@ Q-Learning 에이전트는 다음 6개 행동 중 하나를 선택합니다(`hea
     | $P_{delay}$ | `DELAY_PENALTY_WEIGHT(5.0)` × $delay$ (**마감 초과 시에만**) | 마감(deadline) 초과분에 대해 **초당 −5.0**의 지연 페널티 |
     | $R_{co\text{-}sched}$ | 상보 자원 동거 시 **+0.15**/노드, 동일 자원군 동거 시 **−0.20**/노드 | 이기종 co-scheduling 최적화 유도 |
 
-*   **Starvation 방어 메커니즘**: 별도의 "Aging 상수(−10)"는 코드에 존재하지 않으며, 대신 ①상태 축 $u_{sla}$가 마감 30초 전에 `1`(긴급)로 전이하여 에이전트가 임박 태스크를 인지하도록 하고, ②마감을 초과하면 위 $P_{delay}$(초당 −5.0)가 급격히 누적되어 무한 보류를 억제합니다. 장애 복구된 서브태스크에는 별도로 `deadline = now + 45.0초`가 재부여됩니다.
+*   **Starvation 방어 메커니즘**: 별도의 "Aging 상수(−10)"는 코드에 존재하지 않으며, 대신 ①상태 축 $u_{sla}$가 마감 30초 전에 `1`(긴급)로 전이하여 에이전트가 임박 태스크를 인지하도록 하고, ②마감을 초과하면 위 $P_{delay}$(초당 −5.0)가 급격히 누적되어 무한 보류를 억제합니다. 장애 복구된 서브태스크에는 별도로 `deadline = now + 20.0초`가 재부여됩니다.
 
 #### 3) 학습 하이퍼파라미터 및 수렴 정책
 *   학습률 $\alpha = 0.1$, 할인율 $\gamma = 0.9$, 탐험률 $\epsilon$: 초기 `1.0` → 최소 `0.05`, 감쇠율 `decay_rate = 0.995`.
@@ -291,7 +386,7 @@ Q-Learning 에이전트는 다음 6개 행동 중 하나를 선택합니다(`hea
 *   **이어서 재개**: 최종 파일은 없으나 중간 체크포인트 `data/checkpoint_{sub_task_id}_epoch_{ep}.pt`가 검출되면, 에포크를 내림차순 스캔해 **최신 에포크 가중치를 로드하고 남은 에포크만큼만** 학습을 재개합니다(처음부터 재학습 방지). 체크포인트는 워커가 매 에포크 종료 시 저장합니다.
 
 ### 라. DEAD 워커 연쇄 복구 (Cascaded Recovery) 및 자동 스케일아웃
-*   Heartbeat 3.0초 미수신으로 `DEAD` 판정 시(`check_and_cleanup_dead_workers`), 해당 노드가 수행 중이던 서브태스크의 Lineage를 `FAILED`로 표기하고, 복구 대상 서브태스크를 `is_recovered_subtask: True`·`deadline = now + 45.0초`와 함께 **대기열 선두(index 0)**로 재큐잉합니다.
+*   Heartbeat 3.0초 미수신으로 `DEAD` 판정 시(`check_and_cleanup_dead_workers`), 해당 노드가 수행 중이던 서브태스크의 Lineage를 `FAILED`로 표기하고, 복구 대상 서브태스크를 `is_recovered_subtask: True`·`deadline = now + 20.0초`와 함께 **대기열 선두(index 0)**로 재큐잉합니다.
 *   재큐잉 직후 대체 자원을 즉시 공급하기 위해 `cluster_manager.scale_out_worker("spot_a")`를 자동 연동하여 처리량을 보전합니다.
 
 ### 마. 임시 가중치 자동 정리 (Clean-up)
@@ -311,7 +406,7 @@ $$\text{Epoch Total Time} = \frac{\text{Measured Compute Time}}{\text{GPU Scale 
     *   **이미지 분류 (CNN)**: SimpleCNN + 인라인 MNIST 모사. 연산 집약형(GPU 가속 지향), Spot 절감 검증용.
     *   **시계열 예측 (RNN)**: SimpleRNN + 사인파 합성 데이터. CPU/GPU 균형형, 노드 이종성 검증용.
     *   **자연어 처리 (LSTM)**: SimpleLSTM + 텍스트 데이터. 메모리 집약형, cGroup 제한 및 OOM 방어 측정용.
-*   OOM 시뮬레이션: LSTM 태스크는 8% 확률로(또는 task_id에 `fail` 포함 시) 강제 실패하며, 다음 Heartbeat가 CPU 1.5% / Mem 99.9%를 보고하도록 하여 자원 압박을 재현합니다.
+*   OOM 시뮬레이션: [FailureSimulator.check_oom](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/common/failure_simulator.py#L62) 동거 메모리바운드 경합 OOM 모델 적용. LSTM 및 RNN 태스크는 노드 타입에 따라 기본 OOM 확률(Spot-B 20%, Spot-A 8%, On-Demand 2%)에 더해, 동일 물리 노드 내 동거 중인 메모리 집약형 태스크 개수당 8%씩 가산(최대 60%)되는 실전적 경합 확률을 모사하여 무분별한 스케줄링을 제어합니다. OOM 발생 시 다음 Heartbeat가 CPU 1.5% / Mem 99.9%를 보고해 자원 고갈 상태를 재현합니다.
 
 ---
 
@@ -319,9 +414,9 @@ $$\text{Epoch Total Time} = \frac{\text{Measured Compute Time}}{\text{GPU Scale 
 
 비용-SLA 트레이드오프를 학습시켜 Q-Learning 에이전트가 적시 스케일인을 배우도록 하기 위한 과금 모델입니다. (2026-07-03 패치)
 
-*   **설계 의도**: 태스크 완료 시점에 비용을 몰아 차감하던 방식은 스팟 노드를 증설만 하고 유휴로 방치해도 예산이 깎이지 않아, 에이전트가 스케일인의 필요성을 학습하지 못하는 문제가 있었습니다. 이를 해결하기 위해 AWS/GCP처럼 **가동 중인 모든 워커의 시간당 요금을 초 단위로 환산해 매 초 가상 예산에서 실시간 차감**(`virtual_budget -= cost_per_hour / 3600.0`)하는 상시 구동 비용 모델을 목표로 설계했습니다.
-*   ⚠️ **현 구현 상태(코드=진실)**: 활성 스케줄러 경로(`head/scheduler/` 패키지)에는 **초당 실시간 차감 루프가 존재하지 않으며**, 완료 시점 차감(`head/scheduler/utils.py`의 `virtual_budget -= task_cost`) 역시 주석 처리되어 있습니다. 초당 차감 로직은 현재 임포트되지 않는 레거시 파일 `head/scheduler.py`(패키지에 의해 그림자 처리됨)에만 남아 있습니다. 따라서 **실사용 시 가상 예산은 초기값 $10.0에서 사실상 감소하지 않습니다.**
-*   **정합화 방향(TODO)**: 상시 과금을 실제로 활성화하려면 `scheduler_loop`(활성 경로)에 초당 차감 루틴을 이식하거나, 레거시 `head/scheduler.py`의 해당 블록을 활성 패키지로 통합해야 합니다. 대시보드의 예산 표기 플레이스홀더($100 등)도 실제 초기값($10.0)과 정합화가 필요합니다.
+*   **실시간 비용 청구**: 가상 예산 고갈의 위기감을 체감하고 에이전트가 적시 스케일인을 유도하도록 하기 위해, AWS/GCP처럼 **가동 중인 모든 워커 노드의 시간당 요금을 초 단위로 환산하여 스케줄러 핵심 루프의 매 주기(0.2초)마다 가상 예산에서 실시간 차감**합니다.
+    $$\text{Virtual Budget Decrement} = \frac{\text{Cost Per Hour}}{3600.0} \times 0.2$$
+*   **정합화 완료**: 2026-07-09 패치를 통해 `scheduler_daemon.py` 의 메인 루프에 실시간 차감 로직이 완전히 정합화 적용되었으며, 대시보드의 예산 표기 및 차감도 실제 초기 가상 예산($1.5 기본값)과 연동하여 동기화 가동 중입니다.
 
 ---
 

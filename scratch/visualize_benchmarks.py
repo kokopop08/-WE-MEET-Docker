@@ -12,7 +12,13 @@ def load_and_summarize(csv_path, mode_name):
         print(f"[경고] {csv_path} 파일이 존재하지 않아 {mode_name} 벤치마크 데이터를 건너뜁니다.")
         return None
     try:
-        df = pd.read_csv(csv_path)
+        # 헤더가 없는 CSV 파일이므로 컬럼명을 수동 지정하여 로드
+        columns = [
+            "timestamp", "mode", "task_id", "model_type", "status", 
+            "execution_time", "cost", "delay", 
+            "od_count", "spot_a_count", "spot_b_count", "budget"
+        ]
+        df = pd.read_csv(csv_path, header=None, names=columns)
         if df.empty:
             return None
         # 데이터 정제
@@ -62,7 +68,9 @@ def load_and_summarize(csv_path, mode_name):
         return None
 
 def main():
-    data_dir = "data"
+    # 스크립트 파일 위치 기준으로 data 디렉토리의 절대 경로 획득하여 CWD 영향 방지
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.abspath(os.path.join(script_dir, "../data"))
     modes = {
         "static": os.path.join(data_dir, "benchmark_results_static.csv"),
         "dynamic": os.path.join(data_dir, "benchmark_results_dynamic.csv"),
@@ -146,8 +154,8 @@ def main():
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     
-    # 결과 이미지 저장
-    output_img = "data/benchmark_comparison_chart.png"
+    # 결과 이미지 저장 (CWD 독립적인 절대 경로 활용)
+    output_img = os.path.join(data_dir, "benchmark_comparison_chart.png")
     plt.savefig(output_img, dpi=150)
     print(f"\n[성공] 벤치마크 비교 시각화 그래프가 {output_img}에 성공적으로 저장되었습니다!")
     plt.close()
