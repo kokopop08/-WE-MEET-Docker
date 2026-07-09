@@ -10,7 +10,7 @@
 #
 # - Eviction (Preemption) : 클라우드 플랫폼이 Spot 워커 컨테이너를 강제 회수
 #   └ 확률의 유일 진실(Single Source of Truth)은 common/cost_model.yaml의 preemption_probability.
-#   └ Spot-A: 위험구간 30% / 평시 7.5%  (cost_model.yaml 기준)
+#   └ Spot-A: 위험구간 50% / 평시 12.5%  (cost_model.yaml 기준)
 #   └ Spot-B: 위험구간 10% / 평시 2.5%
 #   └ 위험구간(P_spot)은 30초 사이클 중 앞 10초. current_danger_phase()로 판정하며
 #     회수 데몬과 스케줄러가 동일 함수를 공유해 값 불일치를 원천 차단한다.
@@ -48,9 +48,9 @@ class FailureSimulator:
 
     # --- Eviction (Preemption) 시뮬레이션 설정 ---
     # 유일 진실은 cost_model.yaml의 preemption_probability. 아래 값은 yaml 로드 실패 시의 폴백일 뿐이며
-    # cost_model.yaml(spot_a 0.30 / spot_b 0.10)과 동일하게 맞춰 표시값-실제값 불일치를 방지한다.
+    # cost_model.yaml(spot_a 0.50 / spot_b 0.10)과 동일하게 맞춰 표시값-실제값 불일치를 방지한다.
     EVICTION_BASE_PROB = {
-        "spot_a": 0.30, # Spot-A: 위험구간(P_spot=1) 시 30% (cost_model.yaml 폴백)
+        "spot_a": 0.50, # Spot-A: 위험구간(P_spot=1) 시 50% (cost_model.yaml 폴백, 0.30→0.50 상향)
         "spot_b": 0.10, # Spot-B: 위험구간(P_spot=1) 시 10% (cost_model.yaml 폴백)
     }
     EVICTION_IDLE_FACTOR = 0.25     # 평시(P_spot=0)에는 위험구간 확률의 25%로 감소

@@ -28,6 +28,11 @@ from common.failure_simulator import FailureSimulator
 COST_MODEL_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../common/cost_model.yaml'))
 agent = QLearningAgent(cost_model_path=COST_MODEL_PATH, decay_rate=0.999, epsilon_min=0.05)
 
+# 동일 태스크가 회수/OOM으로 반복 실패하며 큐를 무한 점유(thrashing)하는 것을 막기 위한 재시도 상한.
+# 이 횟수만큼 실패하면 재큐잉을 중단하고 DEAD_LETTER(영구 실패)로 확정한다.
+# (일시적 회수는 1~2회 재시도로 회복 기회를 주되, 구조적으로 불가능한 배정은 조기에 포기.)
+MAX_TASK_ATTEMPTS = 3
+
 # 온라인 훈련 모드(Q_LEARNING_TRAINING_MODE = True)인 경우, 기학습된 Q-Table 지식은 유지하되
 # 실전 탐험을 처음부터 충분히 수행하도록 Epsilon을 1.0으로 강제 초기화하여 기동합니다.
 if getattr(gcs_state, "Q_LEARNING_TRAINING_MODE", False):
@@ -760,6 +765,18 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
         
         # 실패 시 복구 재삽입
         if not success:
+            # --- 재시도 상한 검사: 동일 태스크의 회수/OOM 반복 실패(thrashing) 차단 ---
+            # task 딕셔너리에 누적 실패 횟수를 기록한다. 같은 dict를 재큐잉하므로 카운터가 재시도 간 보존된다.
+            attempts = task.get("attempts", 0) + 1
+            task["attempts"] = attempts
+            if attempts >= MAX_TASK_ATTEMPTS:
+                # 상한 도달 → 재큐잉하지 않고 영구 실패(DEAD_LETTER)로 확정. 큐 무한 점유를 끊는다.
+                with gcs_state.registry_lock:
+                    gcs_state.task_status[task_id] = "DEAD_LETTER"
+                gcs_state.save_gcs_state()
+                dashboard.log_event(f"[Dead Letter] 작업 {task_id} 최대 재시도({MAX_TASK_ATTEMPTS}회) 초과 -> 재배정 중단, 영구 실패 확정(큐에서 제외).")
+                return
+
             last_epoch = 0
             checkpoint_file = None
             for ep in range(epochs, 0, -1):
@@ -768,15 +785,15 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                     last_epoch = ep
                     checkpoint_file = chk_path
                     break
-            
+
             if last_epoch > 0 and last_epoch < epochs:
                 remaining_epochs = epochs - last_epoch
-                dashboard.log_event(f"[장애 복구] 작업 {task_id} 중단 감지 -> {last_epoch} Epoch 가중치를 기반으로 이어서 학습 복구(남은 {remaining_epochs} Epochs) 대기 큐 재할당.")
+                dashboard.log_event(f"[장애 복구] 작업 {task_id} 중단 감지 -> {last_epoch} Epoch 가중치를 기반으로 이어서 학습 복구(남은 {remaining_epochs} Epochs) 대기 큐 재할당. (재시도 {attempts}/{MAX_TASK_ATTEMPTS})")
                 task["dataset_path"] = checkpoint_file
                 task["epochs"] = remaining_epochs
             else:
-                dashboard.log_event(f"[장애 복구] 작업 {task_id} 장애 유실 감지 -> 복구를 위해 대기 큐 재할당 (처음부터 재학습).")
-                
+                dashboard.log_event(f"[장애 복구] 작업 {task_id} 장애 유실 감지 -> 복구를 위해 대기 큐 재할당 (처음부터 재학습). (재시도 {attempts}/{MAX_TASK_ATTEMPTS})")
+
             with gcs_state.queue_lock:
                 gcs_state.task_queue.append(task)
             gcs_state.save_gcs_state()

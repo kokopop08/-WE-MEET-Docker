@@ -68,7 +68,7 @@ class SimulatedEnvironment:
         self.task_counter += 1
         model = random.choice(MODEL_TYPES)
         epochs = random.randint(12, 20)
-        timeout = random.randint(5, 40)   # 여유~임박 데드라인 혼재
+        timeout = random.randint(5, 12)   # 실제 scheduler_daemon과 동일하게 5~12초로 단축하여 타이트하게 학습
         self.task_queue.append({
             "task_id": f"sim-task-{self.task_counter:04d}",
             "model_type": model,
@@ -190,8 +190,14 @@ class SimulatedEnvironment:
                             self._finalize(w, success=False, evicted=True)
                         del self.workers[wid]
 
-        # 4) 신규 태스크 유입 (40% 확률)
-        if random.random() < 0.4:
+        # 4) 신규 태스크 유입 (실제 docker의 0.6초 주기당 4% burst / 18% normal을 1초 주기로 보정 매핑)
+        is_burst = random.random() < 0.067
+        is_normal = not is_burst and (random.random() < 0.30)
+        if is_burst:
+            num_new = random.randint(5, 8)
+            for _ in range(num_new):
+                self._generate_task()
+        elif is_normal:
             self._generate_task()
 
         # 5) 에이전트 행동 적용

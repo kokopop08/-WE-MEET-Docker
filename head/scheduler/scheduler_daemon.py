@@ -167,9 +167,9 @@ def generate_mock_tasks():
     model_types = ["CNN", "RNN", "LSTM"]
     
     # 가상 태스크 생성 빈도 상향 (쉬는 시간 단축)
-    # 8%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
-    # 92%의 확률로는 18%의 확률로 단일 태스크 유입
-    is_burst = random.random() < 0.08
+    # 4%의 확률로 '태스크 폭풍(Burst)' 발생: 5~8개의 태스크가 한번에 유입
+    # 18%의 확률로 단일 태스크 유입
+    is_burst = random.random() < 0.04
     is_normal = not is_burst and (random.random() < 0.18)
     
     if is_burst:
@@ -219,11 +219,12 @@ def scheduler_loop():
     empty_queue_duration = 0.0
     scale_in_timer = 0.0
     tick_counter = 0
+    budget_exhausted = False  # 예산 소진(파산) 진입 여부. 진입 후엔 신규 태스크를 받지 않고 잔여 작업만 소화한다.
     while True:
         time.sleep(0.2)  # 0.2초 주기 의사결정 루프 (High-Frequency Scheduling)
         tick_counter += 1
         run_scale_decisions = (tick_counter % 5 == 0)
-        
+
         # --- 0. 가상 예산 실시간 차감 (수면 주기가 0.2초이므로 0.2배 보정 차감) ---
         with gcs_state.registry_lock:
             for wid, info in gcs_state.worker_registry.items():
@@ -231,13 +232,36 @@ def scheduler_loop():
                 cost_profile = agent.nodes_config.get(node_type, {"cost_per_hour": 0.0})
                 cost_per_hour = cost_profile.get("cost_per_hour", 0.0)
                 gcs_state.virtual_budget -= (cost_per_hour / 3600.0) * 0.2
-                
+
+        # --- 0-1. 예산 소진 시 완전 정지 (파산 종료) ---
+        # cost(잔여 예산)가 0 이하가 되면: (1) 신규 mock 태스크 생성을 즉시 중단하고,
+        # (2) 진행 중이던 태스크가 모두 마무리되면 스케줄러 루프를 종료한다.
+        # 세 스케줄러(static/dynamic/q_learning) 모두 "동일한 예산 소진" 지점에서 멈추므로 공정 비교가 성립한다.
+        if gcs_state.virtual_budget <= 0.0:
+            if not budget_exhausted:
+                budget_exhausted = True
+                dashboard.log_event(f"[예산 소진] 잔여 예산이 0 이하(${gcs_state.virtual_budget:.4f})로 파산. 신규 태스크 유입 중단 -> 진행 중 작업만 마무리 후 종료합니다.")
+            # 진행 중(실행/맵/머지)인 워커가 하나도 없고 대기 큐도 비었으면 벤치마크를 종료
+            with gcs_state.registry_lock:
+                in_flight = any(
+                    not str(info.get("status", "IDLE")).startswith(("IDLE", "DEAD"))
+                    for info in gcs_state.worker_registry.values()
+                )
+            with gcs_state.queue_lock:
+                queue_empty = (len(gcs_state.task_queue) == 0)
+            if not in_flight and queue_empty:
+                dashboard.log_event("[예산 소진] 진행 중 작업 없음 + 대기 큐 비움 확인 -> 스케줄러 루프를 정상 종료합니다.")
+                gcs_state.save_gcs_state()
+                break
+
         # --- 1초 주기의 백그라운드 상태 제어 (5틱당 1회 실행) ---
         if run_scale_decisions:
             # 1. DEAD 노드 헬스체크 및 격리 제거
             check_and_cleanup_dead_workers()
-     
-            # 2. 주기적 랜덤 가상 태스크 자동 생성 및 큐 투입 (시뮬레이터 구동용)
+
+        # 2. 주기적 랜덤 가상 태스크 자동 생성 및 큐 투입 (쉬는 시간을 줄이기 위해 3틱마다 호출)
+        #    예산이 소진되면 신규 태스크를 더 이상 받지 않는다(파산 후 유입 차단).
+        if tick_counter % 3 == 0 and not budget_exhausted:
             generate_mock_tasks()
  
         # --- 3. 각 모드별 의사결정 서브 모듈 위임 (배정은 0.1초마다 즉시, 스케일링 판단은 1초마다 안전하게 실행) ---
