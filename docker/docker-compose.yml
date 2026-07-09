@@ -29,6 +29,11 @@ services:
     environment:
       - NODE_TYPE=head
       - PYTHONUNBUFFERED=1
+      # 실험 제어(오케스트레이터/호스트 env 에서 주입). 미지정 시 평상시 기본값.
+      - SCHEDULER_MODE=${SCHEDULER_MODE:-dynamic}
+      - Q_LEARNING_TRAINING_MODE=${Q_LEARNING_TRAINING_MODE:-true}
+      - EXPERIMENT_AUTOEXIT=${EXPERIMENT_AUTOEXIT:-0}
+      - INITIAL_VIRTUAL_BUDGET=${INITIAL_VIRTUAL_BUDGET:-}
     deploy:
       resources:
         reservations:
@@ -51,8 +56,6 @@ services:
       - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트
     deploy:
       resources:
-        limits:
-          memory: 2048M
         reservations:
           devices:
             - driver: nvidia

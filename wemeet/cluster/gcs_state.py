@@ -1,7 +1,16 @@
+import os
 import threading
 
 from wemeet.config import env_config as _ec
 from wemeet.config import paths as _paths
+
+
+def _env_truthy(name, default=False):
+    """환경변수를 불리언으로 해석한다("1"/"true"/"yes"/"on" → True). 미설정 시 default."""
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
 
 # --- 전역 리소스 상태 및 GCS (Global Control Store) 정의 ---
 
@@ -34,7 +43,12 @@ task_lineage = {}
 # 전역 가상 자산 관리 변수
 # 버스트 벤치마크 시나리오(명세서 Scenario 1)에서 예산 축이 실제로 물게 하려는 시나리오 파라미터.
 # 짧은 런에서도 자원을 남발하는 Static이 조기 파산하도록 초기 예산을 낮게 설정한다. (튜닝 포인트)
-INITIAL_VIRTUAL_BUDGET = _ec.budget()["initial_virtual_budget"]  # 값 출처: sim_env.yaml budget
+# 기본값 출처: sim_env.yaml budget. 실환경 실험에서는 INITIAL_VIRTUAL_BUDGET 환경변수로 상향 가능.
+try:
+    _budget_env = os.environ.get("INITIAL_VIRTUAL_BUDGET")
+    INITIAL_VIRTUAL_BUDGET = float(_budget_env) if _budget_env else _ec.budget()["initial_virtual_budget"]
+except ValueError:
+    INITIAL_VIRTUAL_BUDGET = _ec.budget()["initial_virtual_budget"]
 virtual_budget = INITIAL_VIRTUAL_BUDGET  # 초기 예산 ($)
 """float: 현재 사용 가능한 가상 잔여 예산 ($)."""
 
@@ -45,13 +59,22 @@ task_counter = 0        # 고유한 TASK ID 생성을 위한 카운터 변수
 latest_conclusions = []
 """list: 태스크별 최종 FedAvg 병합 및 추론 결론 텍스트의 누적 레포지토리."""
 
-# 스케줄러 구동 모드
-SCHEDULER_MODE = "dynamic"
+# 스케줄러 구동 모드 (환경변수 SCHEDULER_MODE 우선, 미설정 시 dynamic)
+SCHEDULER_MODE = os.environ.get("SCHEDULER_MODE", "dynamic")
 """str: 현재 활성화된 스케줄러 구동 모드 ("static", "dynamic", "q_learning")."""
 
 # Q-Learning 실행 모드 설정 (True: 온라인 추가 학습 진행, False: 사전 학습본으로 고속 추론 및 배정만 수행)
-Q_LEARNING_TRAINING_MODE = True
+# 환경변수 Q_LEARNING_TRAINING_MODE 우선, 미설정 시 현행 기본값(True) 유지.
+Q_LEARNING_TRAINING_MODE = _env_truthy("Q_LEARNING_TRAINING_MODE", default=True)
 """bool: Q-Learning의 온라인 학습 및 테이블 실시간 영속화 여부를 결정하는 모드 플래그."""
+
+# 실험 자동 종료 플래그 (환경변수 EXPERIMENT_AUTOEXIT=1 시, 예산 소진으로 스케줄러가 끝나면 head 자체 종료)
+EXPERIMENT_AUTOEXIT = _env_truthy("EXPERIMENT_AUTOEXIT", default=False)
+"""bool: 예산 소진으로 스케줄러 루프가 정상 종료됐을 때 head 프로세스를 graceful 종료할지 여부."""
+
+# 스케줄러 루프 정상 종료(예산 소진) 신호. head 메인 루프가 폴링하여 자동 종료 판단에 사용.
+SCHEDULER_COMPLETED = False
+"""bool: 스케줄러 루프가 예산 소진으로 정상 종료되면 True 로 세팅됨(자동 종료 트리거용)."""
 
 # Docker SDK 클라이언트 공통 객체
 DOCKER_CLIENT = None # Docker API 서버와 통신, 컨테이너 관리

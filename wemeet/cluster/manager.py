@@ -224,7 +224,7 @@ def scale_out_worker(node_type):
             network=network_name,
             cpu_period=100000,
             cpu_quota=int(cpu_limit * 100000),
-            mem_limit=f"{int(mem_limit_mb)}m",
+            mem_limit=f"{int(mem_limit_mb)}m",  # [OOM 회귀 수정] cGroup 메모리 격리 상한(리팩토링 중 누락 → 복구)
             device_requests=device_requests,
             environment={
                 "NODE_TYPE": node_type,
@@ -446,8 +446,8 @@ def resize_worker_resources(worker_id, cpu_limit, mem_limit_mb):
         container.update(
             cpu_period=cpu_period,
             cpu_quota=cpu_quota,
-            mem_limit=mem_limit_bytes,
-            memswap_limit=mem_limit_bytes
+            mem_limit=mem_limit_bytes,        # [OOM 회귀 수정] 실시간 리사이징 시 메모리 상한(리팩토링 중 누락 → 복구)
+            memswap_limit=mem_limit_bytes     # swap 까지 동일 상한 → 스왑 폭주로 인한 호스트 OOM 차단
         )
         print(f"[Docker SDK] cGroup 자원 크기 업데이트 성공 -> {container_name} | CPU: {cpu_limit} Cores (quota: {cpu_quota}), Mem: {mem_limit_mb} MB")
         return True, "Success"

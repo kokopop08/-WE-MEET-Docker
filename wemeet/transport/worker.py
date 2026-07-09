@@ -150,7 +150,7 @@ def serve(worker_id, node_type, port, head_host, head_port):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=3)) #Head로 부터 요청이 병목이 생기지 않도록 스레드 3개を用意
     servicer = BabyRayWorkerServicer(worker_type=node_type) # Worker 서버 객체 생성
     babyray_pb2_grpc.add_BabyRayServiceServicer_to_server(servicer, server) # 서비서를 서버에 등록
-    server.add_insecure_port(f"[::]:{port}") # 서버 포트 설정
+    server.add_insecure_port(f"0.0.0.0:{port}") # 서버 포트 설정
     server.start() # 서버 시작
     print(f"=== [Worker] '{worker_id}' ({node_type}) gRPC 서버 활성화 (포트: {port}) ===")
     

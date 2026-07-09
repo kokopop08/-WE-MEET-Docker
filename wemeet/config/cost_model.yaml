@@ -5,19 +5,19 @@
 nodes:
   on_demand:
     cpu_limit: 2.0
-    memory_limit_mb: 2048
+    memory_limit_mb: 4096  # 실제 cgroup 상한 (512→4096 상향): 실제 torch 런타임 footprint(~수백MB~GB) 수용, 유휴 호스트 spurious OOM-kill 방지
     cost_per_hour: 7.10  # AWS g4dn.xlarge 서울 리전 온디맨드 표준 단가 기준 ($0.71/Hour)
     gpu_scale_factor: 1.0
     preemption_probability: 0.0
   spot_a:
     cpu_limit: 1.0
-    memory_limit_mb: 1024
+    memory_limit_mb: 2560  # 실제 cgroup 상한 (1024→2560 상향): 실제 torch 런타임 수용. 상대 순서(od>a>b) 유지
     cost_per_hour: 2.20   # AWS g4dn.xlarge 스팟 요금에 1.0 코어 할인을 반영한 단가 ($0.22/Hour)
     gpu_scale_factor: 0.6  # 성능 지향형 (60% GPU 할당)
     preemption_probability: 0.50  # 고휘발성 선점 위험도 (0.30→0.50 상향: 속도만 보는 스케줄러에 회수 페널티 강화)
   spot_b:
     cpu_limit: 0.5
-    memory_limit_mb: 512
+    memory_limit_mb: 1536  # 실제 cgroup 상한 (512→1536 상향): torch 임포트만 ~300~500MB라 512MB는 유휴 호스트에서도 커널 OOM-kill 유발 → 상향
     cost_per_hour: 0.90   # AWS g4dn.xlarge 스팟 요금에 0.5 코어 할인을 반영한 단가 ($0.09/Hour)
     gpu_scale_factor: 0.5  # 안정 지향형 (0.4→0.5 상향: 저가 안정 노드의 실행속도를 개선해 "싸지만 느림" 페널티 완화)
     preemption_probability: 0.10  # 저휘발성 선점 위험도 (매우 안정적)

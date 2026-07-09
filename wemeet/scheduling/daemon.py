@@ -253,6 +253,8 @@ def scheduler_loop():
             if not in_flight and queue_empty:
                 _obslog.log_event("[예산 소진] 진행 중 작업 없음 + 대기 큐 비움 확인 -> 스케줄러 루프를 정상 종료합니다.")
                 gcs_state.save_gcs_state()
+                # 실험 자동 종료용 완료 신호. head 메인 루프가 폴링하여 graceful shutdown 여부를 결정.
+                gcs_state.SCHEDULER_COMPLETED = True
                 break
 
         # --- 1초 주기의 백그라운드 상태 제어 (5틱당 1회 실행) ---

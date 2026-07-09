@@ -424,6 +424,12 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                         gcs_state.worker_registry[reduce_worker_id]["status"] = f"MERGE ({reduce_task_id})"
                 
                 if not reduce_worker_id:
+                    # 병합(FedAvg)은 회수 위험이 없는 on_demand 에 고정하는 게 이상적이지만, worker-1 이
+                    # 다른 태스크로 계속 BUSY 이면 여기서 무한 대기(행 현상)에 빠져 스케줄러가 멎는다.
+                    # → 유한 시간만 on_demand 를 기다린 뒤, 안 비면 임의 IDLE 워커로 폴백한다.
+                    #   (Merge 는 ~1초 FedAvg 라 스팟에서 돌아도 회수 위험이 극히 낮다. 그래도 없으면 실패 처리.)
+                    MERGE_ONDEMAND_WAIT_SEC = 12.0
+                    merge_wait_deadline = time.time() + MERGE_ONDEMAND_WAIT_SEC
                     while True:
                         with gcs_state.registry_lock:
                             on_demand_candidates = [
@@ -434,7 +440,21 @@ def run_task_on_worker(worker_id, worker_info, task, state, action):
                                 reduce_worker_id, reduce_worker_info = on_demand_candidates[0]
                                 gcs_state.worker_registry[reduce_worker_id]["status"] = f"MERGE ({reduce_task_id})"
                                 break
-                        _obslog.log_event(f"[Merge Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중...")
+                            # 대기 시간 초과 시: 임의 IDLE 워커로 폴백(on_demand 우선). 아무도 없으면 None 유지 → 실패 처리.
+                            if time.time() >= merge_wait_deadline:
+                                any_idle = [
+                                    (wid, info) for wid, info in gcs_state.worker_registry.items()
+                                    if info["status"] == "IDLE"
+                                ]
+                                if any_idle:
+                                    any_idle.sort(key=lambda x: 0 if x[1]["node_type"] == "on_demand" else 1)
+                                    reduce_worker_id, reduce_worker_info = any_idle[0]
+                                    gcs_state.worker_registry[reduce_worker_id]["status"] = f"MERGE ({reduce_task_id})"
+                                    _obslog.log_event(f"[Merge Task] 온디맨드 대기 {MERGE_ONDEMAND_WAIT_SEC:.0f}초 초과 -> 임의 IDLE 워커({reduce_worker_id})로 폴백 배정")
+                                else:
+                                    _obslog.log_event(f"[Merge Task] 가용 IDLE 워커 없음 -> 병합 실패 처리 및 재큐잉으로 넘어갑니다.")
+                                break
+                        _obslog.log_event(f"[Merge Task] 온디맨드 가용 IDLE 워커(worker-1) 대기 중... (최대 {MERGE_ONDEMAND_WAIT_SEC:.0f}초 후 폴백)")
                         time.sleep(1.0)
                 
                 if reduce_worker_id:

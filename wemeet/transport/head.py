@@ -72,7 +72,7 @@ def serve():
     # 최대 20개의 worker 생성
     
     babyray_pb2_grpc.add_BabyRayServiceServicer_to_server(BabyRayHeadServicer(), server)
-    server.add_insecure_port(f"[::]:{port}")
+    server.add_insecure_port(f"0.0.0.0:{port}")
     server.start()
     print(f"=== [Head] Baby Ray 마스터 Node gRPC 서버 기동 완료 (포트: {port}) ===")
     
@@ -117,9 +117,14 @@ def serve():
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
+    # 메인 루프: 평상시엔 상주하며 대기한다. 단, EXPERIMENT_AUTOEXIT 가 켜진 무인 실험에서는
+    # 스케줄러가 예산 소진으로 정상 종료(gcs_state.SCHEDULER_COMPLETED)하면 head 도 graceful 종료한다.
     try:
         while True:
-            time.sleep(86400)
+            time.sleep(1.0)
+            if getattr(state, "EXPERIMENT_AUTOEXIT", False) and getattr(state, "SCHEDULER_COMPLETED", False):
+                print("[Head] 실험 완료(예산 소진) 감지 -> 자동 종료(EXPERIMENT_AUTOEXIT)를 수행합니다.")
+                handle_shutdown("AUTOEXIT", None)
     except KeyboardInterrupt:
         handle_shutdown(signal.SIGINT, None)
 

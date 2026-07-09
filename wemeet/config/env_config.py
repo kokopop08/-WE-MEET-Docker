@@ -25,26 +25,27 @@ SIM_ENV_PATH = os.path.join(_THIS_DIR, "sim_env.yaml")
 # ------------------------------------------------------------------------------
 _COST_MODEL_DEFAULT = {
     "nodes": {
-        "on_demand": {"cpu_limit": 2.0, "memory_limit_mb": 2048, "cost_per_hour": 7.10,
+        # memory_limit_mb: 실제 docker cgroup 상한(spurious OOM-kill 방지 위해 torch 런타임 수용 크기로 상향). cost_model.yaml 과 비트 동일.
+        "on_demand": {"cpu_limit": 2.0, "memory_limit_mb": 4096, "cost_per_hour": 7.10,
                       "gpu_scale_factor": 1.0, "preemption_probability": 0.0},
-        "spot_a": {"cpu_limit": 1.0, "memory_limit_mb": 1024, "cost_per_hour": 2.20,
+        "spot_a": {"cpu_limit": 1.0, "memory_limit_mb": 2560, "cost_per_hour": 2.20,
                    "gpu_scale_factor": 0.6, "preemption_probability": 0.50},
-        "spot_b": {"cpu_limit": 0.5, "memory_limit_mb": 512, "cost_per_hour": 0.90,
+        "spot_b": {"cpu_limit": 0.5, "memory_limit_mb": 1536, "cost_per_hour": 0.90,
                    "gpu_scale_factor": 0.5, "preemption_probability": 0.10},
     }
 }
 
 _SIM_ENV_DEFAULT = {
     "failure": {
-        "oom": {
+        "oom": {  # [2026-07-09 완화] 확률 OOM 과도 → 완화. sim_env.yaml 과 비트 동일. ⚠️ 물리 변경 → q_table 재학습 필요.
             "base_prob": {
-                "LSTM": {"on_demand": 0.01, "spot_a": 0.15, "spot_b": 0.85},
-                "RNN":  {"on_demand": 0.00, "spot_a": 0.01, "spot_b": 0.04},
+                "LSTM": {"on_demand": 0.01, "spot_a": 0.08, "spot_b": 0.40},
+                "RNN":  {"on_demand": 0.00, "spot_a": 0.01, "spot_b": 0.02},
                 "CNN":  {"on_demand": 0.00, "spot_a": 0.00, "spot_b": 0.01},
             },
             "colocation_step": 0.10,
-            "prob_cap": 0.90,
-            "legacy_lstm_prob": 0.08,
+            "prob_cap": 0.60,
+            "legacy_lstm_prob": 0.04,
         },
         "eviction": {"idle_factor": 0.25, "poll_sec": 10.0},
         "danger_phase": {"cycle_sec": 30.0, "window_sec": 10.0},

@@ -23,13 +23,15 @@
 failure:
   oom:
     # 노드 메모리 용량 대비 메모리바운드 모형 적합도를 확률로 모사 (자원 무시 배정 처벌)
+    # [2026-07-09 완화] 확률 OOM 모델이 과도(LSTM@spot_b 0.85)해 유휴 호스트에서도 워커가 통째로 죽던 것을 완화.
+    # 상대 순서(spot_b가 최악)는 유지해 "작은 노드에 큰 모형" 처벌 신호는 보존. ⚠️ 물리 변경 → q_table.json 재학습 필요.
     base_prob:
-      LSTM: { on_demand: 0.01, spot_a: 0.15, spot_b: 0.85 }  # 메모리 폭식형
-      RNN:  { on_demand: 0.00, spot_a: 0.01, spot_b: 0.04 }  # 중간/경량
-      CNN:  { on_demand: 0.00, spot_a: 0.00, spot_b: 0.01 }  # 연산 바운드
+      LSTM: { on_demand: 0.01, spot_a: 0.08, spot_b: 0.40 }  # 메모리 폭식형 (spot_b 0.85→0.40, spot_a 0.15→0.08)
+      RNN:  { on_demand: 0.00, spot_a: 0.01, spot_b: 0.02 }  # 중간/경량 (spot_b 0.04→0.02)
+      CNN:  { on_demand: 0.00, spot_a: 0.00, spot_b: 0.01 }  # 연산 바운드 (변경 없음)
     colocation_step: 0.10   # 동거 메모리바운드 태스크당 압력 가산
-    prob_cap: 0.90          # OOM 확률 상한
-    legacy_lstm_prob: 0.08  # node_type 미지정(레거시 워커측) 호출 시 LSTM 자연 OOM
+    prob_cap: 0.60          # OOM 확률 상한 (0.90→0.60 완화)
+    legacy_lstm_prob: 0.04  # node_type 미지정(레거시 워커측) 호출 시 LSTM 자연 OOM (0.08→0.04)
   eviction:
     idle_factor: 0.25       # 평시(P_spot=0)는 위험구간 확률의 25%로 감소
     poll_sec: 10.0          # 회수 데몬 폴링 주기
