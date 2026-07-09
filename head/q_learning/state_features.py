@@ -21,9 +21,9 @@ import time
 from common.failure_simulator import FailureSimulator
 
 # --- 버킷 임계 상수 (튜닝 포인트) ---
-Q_LIGHT_MAX = 3        # 1~3 : 경적체
-Q_MED_MAX = 7          # 4~7 : 중적체 (8+ : 과적체)
-SLA_TIGHT_SEC = 10.0   # 이하: 임박
+Q_LIGHT_MAX = 2        # 1~2 : 경적체
+Q_MED_MAX = 5          # 3~5 : 중적체 (6+ : 과적체)
+SLA_TIGHT_SEC = 15.0   # 이하: 임박
 SLA_MED_SEC = 30.0     # 이하: 중간 여유
 BUDGET_CRITICAL = 0.7  # 미만: 예산 위험
 BUDGET_LOW = 3.0       # 미만: 예산 낮음

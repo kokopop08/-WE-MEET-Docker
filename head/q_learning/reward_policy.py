@@ -43,7 +43,8 @@ def hold_reward(q_len, overdue_seconds_list, delay_penalty_weight):
     for over in overdue_seconds_list:
         if over > 0.0:
             hold_penalty += over * delay_penalty_weight * 0.2
-    return 1.0 - 0.5 * q_len - hold_penalty
+    # 큐에 태스크가 있는데 배정을 미루면 무조건 감점(-)을 받아야 무행동 함정에 빠지지 않습니다.
+    return -0.5 * q_len - hold_penalty
 
 
 def scale_reward(action, urgent, cost_level, scale_success):

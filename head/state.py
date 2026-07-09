@@ -144,3 +144,6 @@ def load_gcs_state():
                 print(f"[GCS State 경고] 상태 복구 실패 (파일을 로드하지 않고 빈 상태로 기동): {e}")
                 return False
 
+# AI 시험(추론) 모드 ON
+Q_LEARNING_TRAINING_MODE = False
+

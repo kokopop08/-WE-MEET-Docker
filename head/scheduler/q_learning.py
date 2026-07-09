@@ -110,7 +110,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             if 5 in available_actions:
                 available_actions.remove(5)
 
-        # 호스트 물리 자원 부족 시 증설 액션 마스킹
+        # [Safe RL] 호스트 물리 자원 부족 시 증설 액션 마스킹
         from head.resource_guard import is_host_resource_sufficient
         if not is_host_resource_sufficient():
             if 4 in available_actions:
@@ -118,12 +118,42 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
             if 5 in available_actions:
                 available_actions.remove(5)
 
-        if u_sla == 1 and any(act in available_actions for act in [0, 1, 2]):
-            if 3 in available_actions:
-                available_actions.remove(3)
+        # [Safe RL] OOM(Out of Memory) 원천 차단 가드레일 (메모리 보호)
+        # LSTM 등 무거운 모델은 512MB RAM인 스팟 노드에서 무조건 OOM이 발생하므로
+        # Spot-A(1), Spot-B(2) 배정 및 스팟 증설(4, 5)을 원천 차단.
+        if peek_task and peek_task.get("model_type") == "lstm":
+            for act in [1, 2, 4, 5]:
+                if act in available_actions:
+                    available_actions.remove(act)
+
+        # [Safe RL] SLA 마감 임박 가드레일 (속도 보호)
+        # 마감이 10초 이내로 임박(urgent)한 경우, 느린 Spot-B(2)나 Spot-B 증설(5), HOLD(3) 시 무조건 지연(SLA 위반) 발생.
+        if urgent:
+            for act in [2, 5, 3]:
+                if act in available_actions:
+                    available_actions.remove(act)
+
+        # [Safe RL] 위험 구간(Danger Phase) 회피 가드레일 (폭파 보호)
+        # 클라우드 회수 확률이 50%에 달하는 위험 구간에는 Spot-A 사용 및 증설을 강제 차단하여 에러를 막음.
+        if ctx.get("danger_phase", 0) == 1:
+            if 1 in available_actions:
+                available_actions.remove(1)
+            if 4 in available_actions:
+                available_actions.remove(4)
+
+        # [Safe RL] Fallback 보정 로직
+        # 조건 중복 마스킹으로 가용한 액션이 0개가 되는 엣지 케이스 방어
+        # (예: LSTM + Urgent인데 On-Demand가 꽉 차서 0번 액션이 없는 경우)
+        # 크래시 방지를 위해 최소한 HOLD(3)라도 허용.
+        if not available_actions:
+            available_actions.append(3)
 
         if available_actions == [3]:
-            break
+            # [Backfilling] 현재 큐 헤드에 있는 태스크를 보류하고, 큐 뒤쪽의 태스크(예: ResNet)가 먼저 실행될 수 있도록 길을 터줍니다.
+            target_task = get_next_runnable_task()
+            if target_task:
+                deferred_tasks.append(target_task)
+            continue
 
         action = agent.choose_action(state, available_actions)
 
@@ -172,12 +202,17 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 from head.scheduler.task_executor import log_online_training
                 log_online_training(state, action, reward, next_state, agent.epsilon)
                 dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (HOLD) | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
-            break
+            
+            # [Backfilling] HOLD 선택 시 큐 후방의 태스크가 스케줄링 될 수 있도록 현재 태스크를 보류
+            target_task = get_next_runnable_task()
+            if target_task:
+                deferred_tasks.append(target_task)
+            continue
             
         elif action == 4:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_A 트리거 -> Spot-A 노드 추가 증설")
             scale_success = False
-            if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
+            if q_len_real >= 5 and spot_scale < MAX_SPOT_SCALE - 1:
                 dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-A 2대 동시 증설")
                 s1 = cluster_manager.scale_out_worker("spot_a")
                 if s1:
@@ -201,12 +236,17 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 from head.scheduler.task_executor import log_online_training
                 log_online_training(state, action, reward, next_state, agent.epsilon)
                 dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (SCALE_SPOT_A) | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
-            break
+            
+            # [Backfilling] 스케일 아웃 결정 시에도 태스크는 아직 배정되지 않았으므로 보류 후 후방 큐 탐색
+            target_task = get_next_runnable_task()
+            if target_task:
+                deferred_tasks.append(target_task)
+            continue
             
         elif action == 5:
             dashboard.log_event(f"[Q-Learning Action] SCALE_OUT_SPOT_B 트리거 -> Spot-B 노드 추가 증설")
             scale_success = False
-            if q_len_real >= 6 and spot_scale < MAX_SPOT_SCALE - 1:
+            if q_len_real >= 5 and spot_scale < MAX_SPOT_SCALE - 1:
                 dashboard.log_event(f"[Q-Learning Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-B 2대 동시 증설")
                 s1 = cluster_manager.scale_out_worker("spot_b")
                 if s1:
@@ -230,7 +270,12 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                 from head.scheduler.task_executor import log_online_training
                 log_online_training(state, action, reward, next_state, agent.epsilon)
                 dashboard.log_event(f"[Q-Learning Update] State={state} | Action={action} (SCALE_SPOT_B) | Reward={reward:.4f} | NextState={next_state} | Epsilon={agent.epsilon:.4f}")
-            break
+            
+            # [Backfilling] 스케일 아웃 결정 시에도 태스크는 아직 배정되지 않았으므로 보류 후 후방 큐 탐색
+            target_task = get_next_runnable_task()
+            if target_task:
+                deferred_tasks.append(target_task)
+            continue
             
     if deferred_tasks:
         with gcs_state.queue_lock:

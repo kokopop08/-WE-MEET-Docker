@@ -14,7 +14,7 @@ nodes:
     memory_limit_mb: 1024
     cost_per_hour: 2.20   # AWS g4dn.xlarge 스팟 요금에 1.0 코어 할인을 반영한 단가 ($0.22/Hour)
     gpu_scale_factor: 0.6  # 성능 지향형 (60% GPU 할당)
-    preemption_probability: 0.50  # 고휘발성 선점 위험도 (0.30→0.50 상향: 속도만 보는 스케줄러에 회수 페널티 강화)
+    preemption_probability: 0.50  # 고휘발성 선점 위험도
   spot_b:
     cpu_limit: 0.5
     memory_limit_mb: 512
