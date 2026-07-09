@@ -16,11 +16,11 @@ services:
       dockerfile: docker/Dockerfile.head
     image: babyray-head-image:latest
     container_name: babyray-head
-    command: python -m head.head
+    command: python -m wemeet.transport.head
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # 호스트 Docker 데몬 연동
-      - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트
-      - ../head/q_learning:/app/head/q_learning # Q-Table 호스트 실시간 동기화 마운트
+      - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트 (q_table.json 포함)
+      - ../wemeet/learning:/app/wemeet/learning # 학습 코드 호스트 실시간 동기화 마운트(구 head/q_learning)
     ports:
       - "50051:50051" # gRPC 포트
       - "8080:8080" # 모니터링 대시보드 포트 추가
@@ -46,7 +46,7 @@ services:
     container_name: babyray-on-demand
     depends_on:
       - head
-    command: python -m worker.worker --id worker-1 --type on_demand --port 50052
+    command: python -m wemeet.transport.worker --id worker-1 --type on_demand --port 50052
     volumes:
       - ../data:/app/data # 공유 데이터 호스트 디렉토리 마운트
     deploy:
@@ -75,7 +75,7 @@ services:
   #    container_name: babyray-worker-2
   #    depends_on:
   #      - head
-  #    command: python -m worker.worker --id worker-2 --type spot_a --port 50053
+  #    command: python -m wemeet.transport.worker --id worker-2 --type spot_a --port 50053
   #    deploy:
   #      resources:
   #        limits:
@@ -101,7 +101,7 @@ services:
   #    container_name: babyray-worker-3
   #    depends_on:
   #      - head
-  #    command: python -m worker.worker --id worker-3 --type spot_b --port 50054
+  #    command: python -m wemeet.transport.worker --id worker-3 --type spot_b --port 50054
   #    volumes:
   #      - babyray-data:/app/data # 공유 데이터 폴더 마운트
   #    deploy:

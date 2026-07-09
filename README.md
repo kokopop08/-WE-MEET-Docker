@@ -6,54 +6,65 @@
 
 ## 📂 프로젝트 패키지 디렉토리 구조
 
-프로젝트의 전반적인 모듈은 결합도를 낮추고 유지 보수성을 높이기 위해 다음과 같이 역할군에 따라 패키지화되었습니다.
+코드는 **위치가 아니라 기능(feature)** 기준으로 단일 우산 패키지 `wemeet/` 아래에 재배치되어 있습니다(설치형 패키지 — `pip install -e .`). 각 서브패키지는 하나의 책임만 갖도록 결합도를 낮췄습니다.
 
 ```
 WE-MEET/
-  ├── head/                      # GCS 및 마스터(Head) 노드 패키지
-  │     ├── head.py              # [인프라] gRPC 마스터 서버 기동 엔트리포인트
-  │     ├── state.py             # [인프라] GCS 전역 인메모리 공유 상태 정의
-  │     ├── cluster_manager.py   # [인프라] WSL2 리소스 가드 및 Docker SDK 스케일 제어
-  │     ├── scheduler/           # 스케줄러 계층 패키지
-  │     │     ├── __init__.py
-  │     │     ├── scheduler_daemon.py # 중앙 스케줄러 스레드 루프 (Backfilling·Map-Merge·DEAD 복구 탑재)
-  │     │     ├── task_executor.py    # 태스크 실행/복구·FedAvg 병합·체크포인트 정리 유틸
-  │     │     ├── static.py      # Static (정적 룰 스텝) 스케줄러
-  │     │     └── dynamic.py     # Dynamic (동적 부하 스텝) 스케줄러 [기본 구동 모드]
-  │     ├── q_learning/          # 지능형 의사결정 Q-Learning 패키지
-  │     │     ├── __init__.py
-  │     │     ├── agent.py       # Q-Learning Agent 클래스 (6-Action·보상 수식 탑재)
-│     │     ├── state_features.py # Q-Learning 상태 특징(State Feature) 단일 산출 모듈
-  │     │     ├── pretrain.py    # 오프라인 사전 학습(Q-Table 수렴) 시뮬레이터
-  │     │     └── q_table.json   # 강화학습 경험 축적 파일
-  │     └── dashboard/           # 모니터링 대시보드 웹 서비스 패키지
-  │           ├── __init__.py
-  │           ├── server.py      # 실시간 대시보드 HTTP 서버 (Port: 8080)
-  │           └── web/           # 실제 서빙되는 정적 프론트엔드 (index.html·app.js·style.css)
-  ├── worker/                    # 분산 학습 연산 워커(Worker) 노드 패키지
-  │     ├── worker.py            # 워커 gRPC 서비서 및 하트비트 클라이언트
-  │     ├── gpu_simulator.py     # CNN/RNN/LSTM 연산 속도 및 하드웨어 점유 시뮬레이터 (FedAvg 병합 포함)
-  │     └── models/              # 모델별 학습 태스크 구현
-  │           ├── base.py        # BaseTask 추상 인터페이스
-  │           ├── cnn.py         # SimpleCNN (이미지 분류)
-  │           ├── rnn.py         # SimpleRNN (시계열 예측)
-  │           └── lstm.py        # SimpleLSTM (자연어 처리)
-  ├── common/                    # 공유 라이브러리 및 하이퍼파라미터 설정
-  │     ├── config.py            # 포트·하트비트 주기 등 전역 상수
-  │     └── cost_model.yaml      # 이기종 인스턴스 요금 및 GPU 성능 스펙 파일
-  ├── proto/                     # gRPC 인터페이스 버퍼 정의 및 컴파일 산출물
-  │     ├── babyray.proto        # Protobuf 서비스/메시지 정의
-  │     ├── babyray_pb2.py       # (생성물) 메시지 stub
-  │     └── babyray_pb2_grpc.py  # (생성물) 서비스 stub
-  ├── compile_proto.py           # .proto → Python stub 컴파일 스크립트 (저장소 루트)
-  ├── references/                # 학술적 레퍼런스 분석서
-  │     └── mentoring_ref.md     # 선행 연구 분석 및 극복 방향 기술
-  ├── project_proposal.md        # 시스템 설계 및 스케줄링 이론 종합 제안서
-  └── docker/                    # 컨테이너화 빌드 및 compose 설정 디렉토리
-        ├── Dockerfile.head      # Head Node용 도커 빌드 이미지 명세
-        ├── Dockerfile.worker    # Worker Node용 도커 빌드 이미지 명세
-        └── docker-compose.yml   # 이기종 클러스터 실증용 Compose 파일
+  ├── wemeet/                          # 기능별 우산 패키지 (import 루트)
+  │     ├── config/                    # 설정·상수 단일 진실(Source of Truth)
+  │     │     ├── env_config.py        # cost_model.yaml + sim_env.yaml 로더(싱글턴·폴백 내장)
+  │     │     ├── settings.py          # 포트·하트비트 주기 등 전역 상수 (구 common/config.py)
+  │     │     ├── paths.py             # data/ 등 런타임 경로 단일 해석기 (CWD·파일깊이 무관)
+  │     │     ├── cost_model.yaml      # 노드 요금·GPU 스펙·회수확률
+  │     │     └── sim_env.yaml         # 확률/환경 변수(OOM·워크로드·보상·상태버킷·시나리오) 단일 파일
+  │     ├── transport/                 # gRPC 통신 계층
+  │     │     ├── head.py              # Head 부팅 진입점 (python -m wemeet.transport.head)
+  │     │     ├── head_service.py      # Head gRPC 서비서 + 대시보드 상태 스냅샷
+  │     │     ├── worker.py            # Worker 부팅 진입점 + 하트비트 클라이언트
+  │     │     ├── worker_service.py    # Worker gRPC 서비서 (작업 수신/상태/자원조정)
+  │     │     └── proto/               # babyray.proto + 생성 stub(babyray_pb2[_grpc])
+  │     ├── cluster/                   # 자원·상태 관리
+  │     │     ├── manager.py           # Docker SDK 스케일 제어 (구 cluster_manager.py)
+  │     │     ├── resource_guard.py    # 호스트 물리 RAM/GPU VRAM 안전 가드
+  │     │     └── gcs_state.py         # GCS 전역 인메모리 공유 상태 (구 state.py)
+  │     ├── scheduling/                # 스케줄러 계층
+  │     │     ├── daemon.py            # 중앙 스케줄러 루프 (구 scheduler_daemon.py)
+  │     │     ├── executor.py          # 태스크 실행/복구·FedAvg 병합·체크포인트 (구 task_executor.py)
+  │     │     ├── static.py            # Static (정적 룰 스텝)
+  │     │     ├── dynamic.py           # Dynamic (동적 부하 스텝)
+  │     │     └── qlearning_step.py    # Q-Learning 스케줄러 1주기 스텝 (구 scheduler/q_learning.py)
+  │     ├── learning/                  # 강화학습 지능형 의사결정
+  │     │     ├── agent.py             # Q-Learning Agent (6-Action·보상 수식)
+  │     │     ├── state_features.py    # 상태 특징(State Feature) 단일 산출 모듈
+  │     │     ├── reward_policy.py     # 비-ASSIGN(HOLD/SCALE) 보상 단일 산출 모듈
+  │     │     └── pretrain.py          # 오프라인 사전 학습(Q-Table 수렴) 시뮬레이터
+  │     ├── simulation/                # 확률 시뮬레이션·성능 측정
+  │     │     ├── failure_simulator.py # OOM·Eviction·OutOfCapacity 확률 모델
+  │     │     ├── fast_sim.py          # 고속 벤치마크 엔진(FastSimulator)
+  │     │     └── benchmark.py         # 반복·통계·시나리오·리포트 (python -m wemeet.simulation.benchmark)
+  │     ├── workload/                  # 연산 워커·모델
+  │     │     ├── runner.py            # 실행기 계층 (구 gpu_simulator.py, FedAvg 병합 포함)
+  │     │     ├── dummy_load.py        # PyTorch 부재 시 모델별 더미 부하 모사
+  │     │     └── models/              # base·cnn·rnn·lstm 학습 태스크 구현
+  │     └── observability/             # 관측(모니터링·로깅·리포트)
+  │           ├── dashboard.py         # 실시간 대시보드 HTTP 서버 (Port: 8080)
+  │           ├── logging.py           # 전역 이벤트 로그 채널(log_event) — dashboard와 분리
+  │           ├── reporting_visualize.py / reporting_analyze.py  # 벤치마크 시각화·분석
+  │           └── web/                 # 서빙되는 정적 프론트엔드 (index.html·app.js·style.css)
+  ├── data/                            # 런타임 상태(q_table.json·gcs_state.json·벤치 CSV) — 패키지 밖(볼륨 마운트)
+  ├── compile_proto.py                 # .proto → Python stub 컴파일 (저장소 루트)
+  ├── pyproject.toml                   # 설치형 패키지 선언(setuptools packages.find = wemeet*)
+  ├── docs/                            # DOCSTRING_STYLE.md(Google 규약) + pdoc 빌드 스크립트
+  ├── patch_notes/                     # 변경 이력 및 설계 근거 로그
+  ├── references/                      # 학술적 레퍼런스 분석서
+  ├── project_proposal.md              # 시스템 설계 및 스케줄링 이론 종합 제안서
+  └── docker/                          # 컨테이너화 빌드 및 compose 설정
+        ├── Dockerfile.head            # Head Node용 도커 빌드 이미지 명세
+        ├── Dockerfile.worker          # Worker Node용 도커 빌드 이미지 명세
+        └── docker-compose.yml         # 이기종 클러스터 실증용 Compose 파일
 ```
+
+> **설정 단일화**: 요금·GPU 스펙은 `wemeet/config/cost_model.yaml`, 그 외 모든 **확률/환경 변수**(OOM·회수·태스크 생성 확률·예산·보상 가중치·상태 버킷·시나리오 프리셋)는 `wemeet/config/sim_env.yaml` 한 곳에 모여 있고, 실제 경로·오프라인 학습·고속 벤치마크가 모두 `wemeet/config/env_config.py` 로더를 통해 같은 값을 참조합니다(드리프트 방지).
 
 ---
 
@@ -81,13 +92,20 @@ docker-compose -f docker/docker-compose.yml up --build
     ```
 
 ### 2. 로컬 가상환경 수동 개별 기동
-디버깅 목적 등으로 터미널에서 각각 프로세스를 띄워 테스트할 수 있습니다.
+디버깅 목적 등으로 터미널에서 각각 프로세스를 띄워 테스트할 수 있습니다. 기능별 패키지(`wemeet/`)
+재배치 이후에는 모듈 실행(`python -m ...`) 방식을 사용합니다(프로젝트 루트에서 실행하거나 `pip install -e .`).
 ```bash
+# (권장) 편집 가능 설치 — sys.path 조작 없이 어디서든 임포트 가능
+pip install -e .
+
 # 터미널 1: Head Node (GCS 및 스케줄러 기동)
-python head/head.py
+python -m wemeet.transport.head
 
 # 터미널 2: Worker Node (포트 50052번에 수동 가동 및 마스터 연결)
-python worker/worker.py --id worker-1 --type on_demand --port 50052 --head-host localhost --head-port 50051
+python -m wemeet.transport.worker --id worker-1 --type on_demand --port 50052 --head-host localhost --head-port 50051
+
+# (측정) 고속 벤치마크 시뮬레이터 — 통계·시나리오·리포트
+python -m wemeet.simulation.benchmark --runs 10 --scenario normal,burst_heavy --chart
 ```
 
 ---
@@ -95,7 +113,8 @@ python worker/worker.py --id worker-1 --type on_demand --port 50052 --head-host 
 ## 🛠️ 주요 기능 요약
 
 1.  **3대 AI 모형 부하 시뮬레이션**: CNN(연산 지향), RNN(균형), LSTM(메모리 지향) 모형의 Epoch 연산 특징에 따른 물리 리소스 점유 시뮬레이터 구동. 호스트의 **NVIDIA MPS(Multi-Process Service) 물리 CUDA 스레드 격리**(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`) 환경변수를 활용하여 하드웨어 수준에서 이기종 성능 편차를 재현.
-2.  **이기종 자원 격리 (cGroup & MPS)**: On-Demand / Spot-A / Spot-B 3종 노드의 CPU/MEM 자원 및 GPU MPS 스펙을 `cost_model.yaml`에 정의하여 격리. 호스트 물리 RAM 감지에 따라 **스팟 확장 상한(MAX_SPOT_SCALE)을 동적으로 조절**하며, 스펙 설정을 동적으로 로드 및 주입.
+2.  **이기종 자원 격리 (cGroup & MPS)**: On-Demand / Spot-A / Spot-B 3종 노드의 CPU/MEM 자원 및 GPU MPS 스펙을 `wemeet/config/cost_model.yaml`에 정의하여 격리. 호스트 물리 RAM 감지에 따라 **스팟 확장 상한(MAX_SPOT_SCALE)을 동적으로 조절**하며, 스펙 설정을 `env_config` 로더로 동적 주입.
+9.  **확률/환경 변수 단일화 & 발표용 측정 도구**: OOM·회수·워크로드 생성 확률 등 시뮬레이션 하이퍼파라미터를 `wemeet/config/sim_env.yaml` 한 파일로 통합(실제 경로·오프라인 학습·고속 sim이 공유). `python -m wemeet.simulation.benchmark`로 3대 스케줄러를 **N회 반복(시드 변동)** 측정하여 평균±표준편차·p50/p90·회수/OOM 분해 지표를 산출하고, 시나리오 프리셋별 마크다운 리포트를 자동 생성.
 3.  **OS 스케줄링 기법 접목**: 선두 차단(HOL Blocking) 해결을 위한 **Backfilling** 스케줄러, 그리고 자원 기아(Starvation)를 방지하기 위해 마감 초과 시 초당 −5.0의 누적 감점을 부여하는 **SLA 마감 패널티** 및 6차원 상태 공간 내 긴급도 버킷(`sla_bucket`) 도입.
 4.  **탄력성 & 고가용성**: 하트비트 **3.0초** 단절 감시(송신 주기 5.0초와의 오탐 트레이드오프 고려)를 통한 노드 장애 격리, **Task Lineage 기반 복구**(장애 서브태스크 재큐잉 + 자동 스케일아웃) 메커니즘 제공.
 5.  **GCS 상태 영속화 (Checkpointing)**: 대기열·태스크 상태·Lineage·예산 등을 `data/gcs_state.json`에 저장하여 Head 재시작 시 중단 지점부터 투명 리플레이(2026-07-04).

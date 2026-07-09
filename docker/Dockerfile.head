@@ -34,4 +34,4 @@ COPY . .
 RUN python compile_proto.py
 
 # 실행 명령어
-CMD ["python", "-m", "head.head"]
+CMD ["python", "-m", "wemeet.transport.head"]

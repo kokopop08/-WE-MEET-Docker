@@ -1,0 +1,201 @@
+"""Head 노드 gRPC 서비서 + 대시보드 상태 스냅샷 (wemeet/transport/head_service.py).
+
+워커 등록/해제/하트비트(GCS 갱신)를 처리하는 gRPC 서비서와, 대시보드 ``/api/status`` 용
+상태 스냅샷 산출 함수를 담는다. 부팅 오케스트레이션(serve)은 [wemeet.transport.head] 이 담당.
+"""
+
+import psutil
+from wemeet.transport.proto import babyray_pb2, babyray_pb2_grpc
+import wemeet.cluster.gcs_state as state
+import wemeet.cluster.manager as cluster_manager
+import wemeet.observability.dashboard as dashboard
+
+class BabyRayHeadServicer(babyray_pb2_grpc.BabyRayServiceServicer):
+    """
+    Baby Ray Head Node의 gRPC 서비스 처리를 전담하는 서비서 클래스입니다.
+    GCS(Global Control Store) 역할을 하는 state.worker_registry를 갱신 및 조회합니다.
+    """
+    def RegisterWorker(self, request, context):
+        """
+        워커 노드를 클러스터 및 GCS에 신규 등록합니다.
+
+        Args:
+            request (RegisterRequest): 워커 ID, 노드 타입 및 포트 번호가 담긴 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            RegisterResponse: 등록 성공 여부 및 결과 메시지.
+        """
+        #  gRPC나 분산 시스템에서 현재 실행 중인 컨텍스트의 상대방(peer) 정보를 가져오는 명령어 (IPv4 주소 확보)
+        peer = context.peer() 
+        
+        # gRPC peer IP 주소 파싱 (IPv4 및 IPv6 호환)
+
+        if peer.startswith("ipv4:"):
+            ip = peer.split(":")[1]
+        # "ipv4:192.168.0.10:50051" → "192.168.0.10" (IPv4)
+
+        elif peer.startswith("ipv6:"):
+            last_colon = peer.rfind(":")
+            ip = peer[5:last_colon]
+            ip = ip.replace("%5B", "").replace("%5D", "").replace("[", "").replace("]", "")
+        # "ipv6:[2001:db8::1]:50051" → "2001:db8::1" (IPv6)
+
+        else:
+            ip = "127.0.0.1"
+        # 둘 다 아닐 경우에는 로컬 IP로 간주
+            
+        if ip == "::1":
+            ip = "127.0.0.1"
+
+        # [아키텍처 디자인 선택 (Trade-off)]
+        # 분산 시스템에서는 원래 고가용성(HA)과 상태 영속성을 보장하기 위해 분산 합의 저장소(예: etcd, ZooKeeper)나
+        # 외부 Redis 등을 사용하는 것이 정석입니다. 다만, 본 프로젝트는 Docker 기반 경량 분산 런타임(Baby Ray)을 지향하므로
+        # 배포 편의성과 오버헤드 최소화를 위해 단일 Head 노드 내 인메모리 딕셔너리 + Lock 동기화 방식을 채택하였습니다.
+        with state.registry_lock:
+            # 1. 중복 ID 검증 -> 이름이 겹쳐서 나느 충돌을 회피
+            if request.worker_id in state.worker_registry:
+                dashboard.log_event(f"[Head Registry 경고] 워커 등록 실패 (중복 ID 감지): ID='{request.worker_id}'")
+                return babyray_pb2.RegisterResponse(
+                    success=False,
+                    message=f"Registration failed. Worker ID '{request.worker_id}' is already registered."
+                )
+
+            # 2. 신규 등록 진행
+            state.worker_registry[request.worker_id] = {
+                "node_type": request.node_type.lower(),
+                "ip": ip,
+                "port": request.port,
+                "last_heartbeat": time.time(),
+                "cpu": 0.0,
+                "mem": 0.0,
+                "status": "IDLE"
+            }
+            # HTTP 서버에 출력
+            dashboard.log_event(f"[Head Registry] 워커 신규 등록: ID='{request.worker_id}' | 주소: {ip}:{request.port} | 타입: {request.node_type}")
+        
+        # 워커에게 성공 응답 전송 (grpc)
+        return babyray_pb2.RegisterResponse(
+            success=True, 
+            message=f"Worker '{request.worker_id}' registered successfully on Head GCS."
+        )
+
+    def DeregisterWorker(self, request, context):
+        """
+        워커 노드가 퇴장할 때 GCS의 레지스트리에서 해당 워커 정보를 삭제합니다.
+
+        Args:
+            request (DeregisterRequest): 퇴장할 워커 식별자가 포함된 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            DeregisterResponse: 해제 성공 여부 및 결과 메시지.
+        """
+        # state.worker_registry에서 해당 워커 정보를 삭제 (lock 사용)
+        with state.registry_lock:
+            # worker_id가 레지스트리에 있는지 확인
+            if request.worker_id in state.worker_registry:
+                # 삭제 (퇴장 처리) - 인메모리 캐시 제거
+                del state.worker_registry[request.worker_id]
+                print(f"[Head Registry] 워커 정상 퇴장: ID='{request.worker_id}'")
+                return babyray_pb2.DeregisterResponse(success=True, message="Deregistered.")
+            
+            # worker_id가 없으면
+            return babyray_pb2.DeregisterResponse(success=False, message="Worker not found.")
+
+    def SendHeartbeat(self, request, context):
+        """
+        워커로부터 실시간 자원 상태 및 생존 신고(Heartbeat)를 받아 GCS를 업데이트합니다.
+
+        Args:
+            request (HeartbeatRequest): 워커 ID 및 CPU, 메모리 자원 사용량 요청 메시지.
+            context (grpc.ServicerContext): gRPC 서비스 컨텍스트.
+
+        Returns:
+            HeartbeatResponse: 수신 응답(Ack) 메시지.
+        """
+        # 워커 ID를 기반으로 컨테이너 이름 생성 (worker-1은 babyray-on-demand로 매핑)
+        if request.worker_id == "worker-1":
+            container_name = "babyray-on-demand"
+        else:
+            container_name = f"babyray-{request.worker_id}"
+
+        # 컨테이너의 실제 CPU 및 메모리 사용량 조회
+        real_cpu, real_mem = cluster_manager.get_container_metrics(container_name)
+        
+        with state.registry_lock:
+            if request.worker_id in state.worker_registry:
+                # 워커의 마지막 하트비트 시간 갱신
+                state.worker_registry[request.worker_id]["last_heartbeat"] = time.time()
+                # SDK 실시간 자원량 값 주입 (실패 시 하트비트 전송자가 송신한 더미 값 반영) - 기본적인 값은 0.0 / OOM이 trigger 되면 99.9%의 형태
+                state.worker_registry[request.worker_id]["cpu"] = real_cpu if real_cpu > 0 else request.cpu_utilization
+                state.worker_registry[request.worker_id]["mem"] = real_mem if real_mem > 0 else request.memory_utilization
+                
+                # 수신된 메트릭 로그 출력 (콘솔에만 출력하여 대시보드 로그 flooding 방지)
+                print(f"[Head GCS] Heartbeat 수신 | ID: '{request.worker_id}' | CPU: {state.worker_registry[request.worker_id]['cpu']}%, Mem: {state.worker_registry[request.worker_id]['mem']}%")
+                
+        return babyray_pb2.HeartbeatResponse(ack=True)
+
+
+def get_dashboard_data():
+    """
+    대시보드 HTTP API 조회를 위해 GCS 상태 데이터 스냅샷을 딕셔너리로 반환합니다.
+
+    Returns:
+        dict: 가상 예산, 워커 목록, 대기열, 호스트 CPU/메모리, GPU 가용 VRAM 정보가 포함된 딕셔너리.
+    """
+    with state.registry_lock:
+        workers = {wid: info.copy() for wid, info in state.worker_registry.items()}
+        
+    # 도커 호스트 상에서 기동 중이지만 아직 등록되지 않은 (LAUNCHING) 워커 임시 감지 및 주입
+    if state.DOCKER_CLIENT is not None:
+        try:
+            containers = state.DOCKER_CLIENT.containers.list(all=True)
+            for c in containers:
+                c_name = c.name
+                if c_name.startswith("babyray-worker-2-") or c_name.startswith("babyray-worker-3-"):
+                    if c.status in ["running", "created"]:
+                        wid = c_name.replace("babyray-", "")
+                        if wid not in workers:
+                            node_type = "spot_a" if "worker-2-" in wid else "spot_b"
+                            workers[wid] = {
+                                "node_type": node_type,
+                                "status": "LAUNCHING",
+                                "port": 0,
+                                "cpu": 0.0,
+                                "mem": 0.0,
+                                "last_heartbeat": time.time()
+                            }
+        except Exception:
+            pass
+            
+    with state.queue_lock:
+        queue = [t.copy() for t in state.task_queue]
+
+    # 완료/실패 태스크 통계 계산
+    total_completed = sum(1 for status in state.task_status.values() if status in ["SUCCESS", "COMPLETED"])
+    total_failed = sum(1 for status in state.task_status.values() if status == "FAILED")
+
+    # Q-Learning Agent의 훈련 파라미터 획득
+    from wemeet.scheduling.executor import agent
+    q_epsilon = getattr(agent, "epsilon", 0.0)
+    # q_epsilon = agent.epsilon (객체의 필드값에 접근)
+    # get.attr(객체, 속성명)
+
+    # 대시보드 웹 API가 JSON 포맷 등으로 파싱하기 편하도록 최종 마스터 데이터 구조 구축
+    return {
+        "virtual_budget": state.virtual_budget,
+        "scheduler_mode": state.SCHEDULER_MODE, # 어떤 스케줄러인지 (static, dynamic, q_learning)
+        "workers": workers, # 현재 워커 정보
+        "queue": queue, # 현재 대기열 정보
+        "total_completed": total_completed, # 완료된 태스크 수
+        "total_failed": total_failed, # 실패한 태스크 수
+        "q_epsilon": q_epsilon, # 딥러닝 모델에서 랜덤성을 제어하는 변수
+        "host_cpu": psutil.cpu_percent(), # CPU 사용률
+        "host_mem": psutil.virtual_memory().percent, # 메모리 사용률
+        "gpu_free_vram": cluster_manager.get_gpu_free_memory(), # GPU 용량 구하는 함수 호출
+        "conclusions": state.latest_conclusions, # 분산학습 추론 결론
+        "nodes_config": getattr(agent, "nodes_config", {}) # 노드 설정
+    }
+
+

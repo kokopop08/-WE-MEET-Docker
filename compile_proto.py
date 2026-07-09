@@ -3,8 +3,8 @@ import sys
 from grpc_tools import protoc
 
 def compile():
-    # proto 디렉토리와 파일 정의
-    proto_dir = "proto"
+    # proto 디렉토리와 파일 정의 (기능별 재배치: wemeet/transport/proto)
+    proto_dir = os.path.join("wemeet", "transport", "proto")
     proto_file = os.path.join(proto_dir, "babyray.proto")
     
     print(f"Compiling {proto_file}...")
@@ -35,14 +35,14 @@ def compile():
         
         # 패턴 1: 일반적인 grpcio-tools가 생성하는 임포트 패턴
         old_import_1 = "import babyray_pb2 as babyray__pb2"
-        new_import_1 = "from proto import babyray_pb2 as babyray__pb2"
+        new_import_1 = "from wemeet.transport.proto import babyray_pb2 as babyray__pb2"
         if old_import_1 in content:
             content = content.replace(old_import_1, new_import_1)
             patched = True
-            
+
         # 패턴 2: 일부 버전이나 설정에 의해 생성될 수 있는 임포트 패턴
         old_import_2 = "import babyray_pb2 as proto_dot_babyray__pb2"
-        new_import_2 = "from proto import babyray_pb2 as proto_dot_babyray__pb2"
+        new_import_2 = "from wemeet.transport.proto import babyray_pb2 as proto_dot_babyray__pb2"
         if old_import_2 in content:
             content = content.replace(old_import_2, new_import_2)
             patched = True

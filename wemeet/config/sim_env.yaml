@@ -1,0 +1,137 @@
+# ==============================================================================
+# WE-MEET: 시뮬레이션 환경 · 확률 변수 단일 진실 (common/sim_env.yaml)
+#
+# [존재 이유]
+#   그동안 "확률적인 변수"가 최소 4곳에 복붙되어(실제 docker 경로 head/scheduler·head/q_learning,
+#   오프라인 sim head/q_learning/pretrain.py, 고속 sim scratch/run_simulations.py) 한쪽만
+#   바뀌면 조용히 드리프트가 났다. state_features.py(상태 인코딩)·reward_policy.py(비-ASSIGN 보상)·
+#   failure_simulator.py(장애 확률)가 '로직'의 유일 진실이라면, 이 파일은 그 '데이터(수치)'의 유일 진실이다.
+#
+# [경계]
+#   - 노드 요금/ GPU 배율/ 회수 기본확률(preemption_probability)은 common/cost_model.yaml이 유일 진실이다.
+#     이 파일에 중복 정의하지 않는다.
+#   - 문맥상 '의도적으로 다른 값'은 여기서 강제 통합하지 않는다(값 무변경 원칙). 대표적으로:
+#       · pretrain.py 의 태스크 유입 확률(burst 0.067 / normal 0.30)은 1틱=1초 축척에 맞춘 '보정 리맵'이라
+#         실제 docker(0.2초 틱, 3틱마다 호출, burst 0.04 / normal 0.18)와 다르다 → workload.pretrain 로 분리.
+#       · scale-in 유예는 정책별로 다르다(dynamic 15s / static·sim 3s) → scheduler_policy 아래에 각각 명시.
+#
+# [값 보존 불변식] 이 파일의 모든 수치는 통합 시점의 하드코딩 값과 '비트 동일'하다.
+#   값을 바꾸면 data/q_table.json(현 물리로 학습된 웜스타트)이 무효화되어 재학습이 필요하다.
+# ==============================================================================
+
+# --- 장애 시뮬레이션 확률 (출처: common/failure_simulator.py) ---
+failure:
+  oom:
+    # 노드 메모리 용량 대비 메모리바운드 모형 적합도를 확률로 모사 (자원 무시 배정 처벌)
+    base_prob:
+      LSTM: { on_demand: 0.01, spot_a: 0.15, spot_b: 0.85 }  # 메모리 폭식형
+      RNN:  { on_demand: 0.00, spot_a: 0.01, spot_b: 0.04 }  # 중간/경량
+      CNN:  { on_demand: 0.00, spot_a: 0.00, spot_b: 0.01 }  # 연산 바운드
+    colocation_step: 0.10   # 동거 메모리바운드 태스크당 압력 가산
+    prob_cap: 0.90          # OOM 확률 상한
+    legacy_lstm_prob: 0.08  # node_type 미지정(레거시 워커측) 호출 시 LSTM 자연 OOM
+  eviction:
+    idle_factor: 0.25       # 평시(P_spot=0)는 위험구간 확률의 25%로 감소
+    poll_sec: 10.0          # 회수 데몬 폴링 주기
+    # 회수 '기본확률'은 cost_model.yaml preemption_probability(spot_a 0.50 / spot_b 0.10)가 유일 진실.
+  danger_phase:
+    cycle_sec: 30.0         # 회수 위험구간 사이클
+    window_sec: 10.0        # 사이클 앞 10초가 위험구간(P_spot=1)
+  out_of_capacity_prob: 0.30  # Spot 신규 증설 시 공급 부족 거절 확률
+
+# --- 가상 워크로드 생성 파라미터 ---
+workload:
+  model_types: [CNN, RNN, LSTM]
+  epochs: { min: 12, max: 20 }
+  timeout: { min: 5, max: 12 }
+  # 실제 docker 경로(scheduler_daemon.py) 및 고속 sim(run_simulations.py) 공통 값
+  burst_prob: 0.04
+  burst_min: 5
+  burst_max: 8
+  normal_prob: 0.18
+  queue_cap: 25             # scheduler_daemon 대기열 상한(버스트 수용)
+  tasks_cap: 100            # 고속 sim 1런당 총 생성 태스크 상한(run_simulations)
+  # 오프라인 sim(pretrain.py) 전용 보정 리맵 — 1틱=1초 축척(실제와 의도적으로 다름)
+  pretrain:
+    burst_prob: 0.067
+    normal_prob: 0.30
+
+# --- 가상 예산 ($) ---
+budget:
+  initial_virtual_budget: 1.5   # 실제 head/state.py (버스트 시나리오 튜닝값)
+  sim_range: [0.5, 3.0]         # pretrain 에피소드 초기 예산 무작위 범위(budget_level 0/1 커버)
+
+# --- 스케일링 / 재시도 ---
+scaling:
+  max_spot_scale_floor: 5   # 실제 max(5, 추천) 의 하한. sim 은 이 값 고정 사용.
+  boot_sec: 8.0             # 고속 sim 스팟 콜드스타트 부팅 모사
+  max_task_attempts: 3      # 태스크 실패 재시도 상한(도달 시 DEAD_LETTER)
+
+# --- 실행시간 캘리브레이션 (실측 benchmark CSV 성공행 기준: floor + 가변항/gpu_scale) ---
+exec_time:
+  floor: 1.5
+  per_epoch: { CNN: 0.06, RNN: 0.03, LSTM: 0.04 }  # 연산바운드 CNN이 가장 무겁게
+  merge_sec: 1.0
+
+# --- Q-Learning 보상 가중치 (출처: head/q_learning/agent.py) ---
+reward:
+  success: 20.0
+  cost_weight: 1000.0
+  delay_penalty_weight: 5.0
+  eviction_penalty: 25.0
+  oom_penalty: 20.0
+  makespan_weight: 0.5
+  cosched_bonus: 0.15       # 이종(compute↔memory) 동거 가산
+  cosched_penalty: 0.20     # 동종 편중 동거 감점
+
+# --- Q-Learning 하이퍼파라미터 (agent.py 생성자 기본값) ---
+qlearning:
+  alpha: 0.1
+  gamma: 0.9
+  epsilon: 1.0
+  epsilon_min: 0.05
+  decay_rate: 0.995         # pretrain.train_offline 은 0.99997 로 별도 오버라이드(넓은 상태공간)
+
+# --- 상태 버킷 임계 (출처: head/q_learning/state_features.py) ---
+state_buckets:
+  q_light_max: 3            # 1~3 경적체
+  q_med_max: 7              # 4~7 중적체 (8+ 과적체)
+  sla_tight_sec: 10.0       # 이하: 임박
+  sla_med_sec: 30.0         # 이하: 중간 여유
+  budget_critical: 0.7      # 미만: 예산 위험
+  budget_low: 3.0           # 미만: 예산 낮음
+  cost_level_threshold: 9.0 # 총 시간당요금 > $9면 고비용 국면(1)
+
+# --- Dynamic 스케줄러 정책 (출처: head/scheduler/dynamic.py) ---
+scheduler_policy:
+  # 모델별 선호 노드 순서(앞쪽 우선). 안전 우선: Spot-A(회수 0.50)는 전 모델 최후순위.
+  model_node_preference:
+    LSTM:  [on_demand, spot_a]
+    CNN:   [on_demand, spot_a, spot_b]
+    RNN:   [spot_b, on_demand, spot_a]
+    MERGE: [on_demand, spot_a, spot_b]
+  # 하드 금지 노드(폴백으로도 배정 안 함). LSTM은 Spot-B OOM(0.85)로 금지.
+  model_forbidden:
+    LSTM: [spot_b]
+  scale_out_burst_qlen: 8   # 큐 심각 적체 시 2대 동시 증설 기준
+  scale_out_normal_qlen: 2  # 일반 적체 시 1대 증설 기준
+  scale_in_sec_dynamic: 15.0  # dynamic: 유휴 지속 축소 유예(플래핑 방지)
+  scale_in_sec_sim: 3.0       # 고속 sim static / pretrain: 유휴 지속 축소 유예
+
+# --- 측정 시나리오 프리셋 (scratch/run_simulations.py --scenario) ---
+# 각 프리셋은 아래 키만 오버라이드한다(그 외는 위 기본값 유지):
+#   initial_virtual_budget, burst_prob, normal_prob, eviction_mult(회수확률 배율)
+# 'normal' 은 sim_env 기본값 그대로(빈 오버라이드).
+scenarios:
+  normal:
+    desc: "평시 부하 (sim_env 기본값)"
+  burst_heavy:
+    desc: "폭주 트래픽 (버스트 빈발) — 스케줄러 적체/증설 대응력 비교"
+    burst_prob: 0.10
+    normal_prob: 0.25
+  low_budget:
+    desc: "저예산 (조기 파산 압박) — 비용 효율 스케줄러 우위 부각"
+    initial_virtual_budget: 0.8
+  high_eviction:
+    desc: "고회수 (Spot 변동성 심화) — 안전 배치 스케줄러 우위 부각"
+    eviction_mult: 1.5

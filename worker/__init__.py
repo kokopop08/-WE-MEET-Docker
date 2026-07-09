@@ -1,1 +1,0 @@
-# Worker Node package.

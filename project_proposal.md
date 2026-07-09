@@ -3,6 +3,8 @@
 본 문서는 이기종 가상 클러스터 기반 ML 분산 학습 제어 엔진인 **WE-MEET**의 프로젝트 수행 계획과 기술 설계 명세서입니다. 탄력적인 가상 클라우드 인프라의 요금제 및 이질성을 활용하여, OOM 병목을 회피하고 가용 비용 대비 분산 학습 Throughput을 자동 극대화하는 탄력적 지능형 제어 엔진을 목표로 정립하였습니다. 
 
 > 📌 **정합화 기준(2026-07-09)**: 본 기술제안서의 모든 수치·규격은 07-09 최종 패치가 반영된 **실제 소스 코드를 기준(Source of Truth)**으로 재검증 및 완전 일치하도록 동기화되었습니다.
+>
+> 🧭 **구조 개편(2026-07-09)**: 코드가 위치 기반(`head`/`worker`/`common`)에서 **기능 기반 우산 패키지 `wemeet/`**(config·transport·cluster·scheduling·learning·simulation·workload·observability)로 재배치되었습니다. 진입점은 `python -m wemeet.transport.head` / `wemeet.transport.worker` 입니다. 또한 요금 외 **모든 확률/환경 변수는 `wemeet/config/sim_env.yaml` 한 파일**로 통합되어 `wemeet/config/env_config.py` 로더를 통해 실제 경로·오프라인 학습·고속 벤치마크가 동일 값을 공유합니다(문서 내 파일 경로는 신규 구조 기준으로 표기).
 
 ---
 
@@ -16,7 +18,7 @@
 *   **이기종 가상 성능 시뮬레이션**: 단일 호스트 내에서 인위적인 소프트웨어 `sleep` 지연 대신, 호스트의 **NVIDIA MPS(Multi-Process Service) 물리 CUDA 스레드 할당 격리** 환경변수를 활용하여 노드별 물리 성능 편차 구현.
     *   **Worker-1**: On-Demand (Scale 1.0, CPU 2.0 Cores, Mem 2GB, 상시 고정 노드)
     *   **Worker-2~N**: Spot-A (Scale 0.6, CPU 1.0 Core, Mem 1GB) 및 Spot-B (Scale 0.5, CPU 0.5 Core, Mem 512MB) — 동적 스케일아웃으로 확장되며 컨테이너 번호(index)를 재사용.
-    *   **스팟 확장 상한**: 호스트 물리 RAM 용량을 감지하여 **동적으로 스케일 상한(MAX_SPOT_SCALE)을 조절**하며, `scheduler_daemon.py`에서 관장. 스팟 상한 판정 시 실제 가동 중인 `spot_a`와 `spot_b` 노드의 총 대수를 정확히 합산하여 제한을 적용합니다.
+    *   **스팟 확장 상한**: 호스트 물리 RAM 용량을 감지하여 **동적으로 스케일 상한(MAX_SPOT_SCALE)을 조절**하며, `wemeet/scheduling/daemon.py`에서 관장. 스팟 상한 판정 시 실제 가동 중인 `spot_a`와 `spot_b` 노드의 총 대수를 정확히 합산하여 제한을 적용합니다.
 *   **3대 머신러닝 워크로드 구성**:
     *   **이미지 분류 (CNN)**: SimpleCNN (GPU 연산 집약형, Spot 절감 검증용)
     *   **시계열 예측 (RNN)**: SimpleRNN (CPU/GPU 균형 연산형, 노드 이종성 검증용)
@@ -85,12 +87,12 @@ graph TD
 ## 2. gRPC 기반 고성능 통신 인터페이스 및 프로토콜 규격
 
 ### 가. 프로토콜 타임아웃 및 메트릭 전송 수치 정의
-1.  **Heartbeat 전송 주기**: 모든 활성 Worker는 **5.0초** 간격(`common/config.py:DEFAULT_HEARTBEAT_INTERVAL = 5.0`)으로 Head Node에 자신의 CPU/Memory 자원 사용률을 포함한 상태 패킷을 송신합니다.
+1.  **Heartbeat 전송 주기**: 모든 활성 Worker는 **5.0초** 간격(`wemeet/config/settings.py:DEFAULT_HEARTBEAT_INTERVAL = 5.0`)으로 Head Node에 자신의 CPU/Memory 자원 사용률을 포함한 상태 패킷을 송신합니다.
 2.  **생존 유실 판정 임계치 (Heartbeat Timeout)**: Head Node가 특정 Worker로부터 **3.0초** 동안 Heartbeat를 수신하지 못하면, 해당 노드를 `DEAD` 상태로 간주하고 장애 복구 프로토콜을 수행합니다. 단, `worker-1`(`on_demand`) 고정 노드는 DEAD 판정 대상에서 영구 제외합니다.
     *   ⚠️ **설계상 유의점 (코드 기준)**: 송신 주기(5.0초)가 판정 임계치(3.0초)보다 길어, 실제 생존한 스팟 노드도 순간적으로 DEAD로 오탐될 여지가 있습니다. 이는 스팟 Eviction을 3초 이내로 대단히 기민하게 감지하고 장애 자가 복구를 즉시 구동하기 위해 의도된 트레이드오프 설계 방식입니다.
 3.  **태스크 할당 및 수거 지연**: gRPC 호출(`AssignTask`/`GetTaskStatus`)에는 명시적 deadline을 설정하지 않으며, 대신 스케줄러의 **0.2초 고속 의사결정 루프(High-Frequency Scheduling)**와 매 틱(5틱마다 1회인 1초 주기)마다 GCS 워커 레지스트리 생존 재확인으로 유실을 감지합니다.
 
-### 나. Protobuf 인터페이스 규격 (`proto/babyray.proto`)
+### 나. Protobuf 인터페이스 규격 (`wemeet/transport/proto/babyray.proto`)
 ```protobuf
 syntax = "proto3";
 package babyray;
@@ -106,7 +108,7 @@ service BabyRayService {
 
 ---
 
-## 3. 노드별 물리 자원 격리 스펙 및 요금 모델 (`common/cost_model.yaml`)
+## 3. 노드별 물리 자원 격리 스펙 및 요금 모델 (`wemeet/config/cost_model.yaml`)
 
 | 노드 타입 | `cpu_limit` | `memory_limit_mb` | `cost_per_hour` | `gpu_scale_factor` | `preemption_probability` |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -115,8 +117,8 @@ service BabyRayService {
 | **Spot-B** (안정 지향 경량 노드) | 0.5 | 512 | **$0.90/hr** | **0.5** | 0.10 |
 
 *   On-Demand는 가장 안정적이며 preemption이 없고, Spot-A는 60% GPU 성능 격리를 지원하는 고요금/고선점 위험 노드이며, Spot-B는 가장 저렴하고 회수율이 낮아 안정적인 극가성비 최경량 노드입니다.
-*   초기 가상 예산은 **$1.5**(`head/state.py:INITIAL_VIRTUAL_BUDGET`)로 설정되어 있습니다. (실제 벤치마크 시나리오 상에서 비용 축의 예산 고갈을 체감할 수 있도록 현실화된 단가)
-*   **cGroup & MPS 동적 로드**: 컨테이너 실제 기동 시 `cluster_manager.py`의 `scale_out_worker()`는 하드코딩 대신 `_load_node_config()` 헬퍼를 통해 `common/cost_model.yaml` 명세를 **동적으로 로드**하여 `nano_cpus` 및 `mem_limit`, 그리고 NVIDIA MPS 스레드 제한(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`)을 컨테이너 생성 시 동적 주입합니다.
+*   초기 가상 예산은 **$1.5**(`wemeet/cluster/gcs_state.py:INITIAL_VIRTUAL_BUDGET`)로 설정되어 있습니다. (실제 벤치마크 시나리오 상에서 비용 축의 예산 고갈을 체감할 수 있도록 현실화된 단가)
+*   **cGroup & MPS 동적 로드**: 컨테이너 실제 기동 시 `wemeet/cluster/manager.py`의 `scale_out_worker()`는 하드코딩 대신 `_load_node_config()` 헬퍼가 `wemeet/config/env_config.py`(→ `cost_model.yaml`)에서 노드 스펙을 로드하여 `nano_cpus` 및 `mem_limit`, 그리고 NVIDIA MPS 스레드 제한(`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` = `gpu_scale_factor * 100`)을 컨테이너 생성 시 동적 주입합니다. (회수 확률도 하드코딩을 제거하고 `env_config.preemption_probs()`로 일원화됨.)
 
 ---
 
@@ -133,13 +135,13 @@ service BabyRayService {
 | **한계 및 단점** | 워크로드 폭증 시 유연한 대처 불가 | 일시적인 부하 요동에 따른 노드 플래핑(Flapping) | 학습 수렴 전까지 탐험(Exploration) 오버헤드 존재 |
 | **자원 간섭 회피** | 없음 | **있음**: CPU $\ge 80\%$ 또는 RAM $\ge 75\%$ 초과 노드 배정 배제 | **있음**: 6차원 상태 공간(`a_mix`) 및 동거 경합 모델 연동 |
 
-> **현재 기본 구동 모드**: `head/state.py:SCHEDULER_MODE = "q_learning"`. Q-Learning 모드는 사전 학습(`head/q_learning/pretrain.py`)으로 수렴시킨 Q-Table을 로드하여 선택적으로 구동합니다. 세 모드 모두 공통 자원 가드(§3)와 Backfilling/장애 복구(§6)를 공유합니다.
+> **현재 기본 구동 모드**: `wemeet/cluster/gcs_state.py:SCHEDULER_MODE = "dynamic"`(코드 기본값). `"q_learning"`으로 전환하면 사전 학습(`wemeet/learning/pretrain.py`)으로 수렴시킨 Q-Table을 로드해 구동합니다. 세 모드 모두 공통 자원 가드(§3)와 Backfilling/장애 복구(§6)를 공유합니다.
 
 ---
 
 ## 5. 6차원 상태 공간(State Space) 및 OS 스케줄링 이론 접목
 
-Q-Learning 에이전트의 상태 변별력을 극대화하여 실제 시스템상의 병목 현상을 방지하도록 수학 모델을 6차원으로 고도화합니다. 모든 스케줄링 상태는 [state_features.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/head/q_learning/state_features.py)에서 유일하고 동기화된 방식으로 산출됩니다.
+Q-Learning 에이전트의 상태 변별력을 극대화하여 실제 시스템상의 병목 현상을 방지하도록 수학 모델을 6차원으로 고도화합니다. 모든 스케줄링 상태는 [state_features.py](file:///c:/Users/win/Desktop/클라우드  WE-MEET 프로젝트/WE-MEET/wemeet/learning/state_features.py)에서 유일하고 동기화된 방식으로 산출됩니다.
 
 ### 가. 6차원 상태 공간 공식 정의
 
@@ -201,7 +203,7 @@ graph TD
 ## 6. 강화학습 보상 설계 및 OS 스케줄링 이론 접목
 
 ### 가. 지연 보상(Delayed Reward) 및 가중치 상수 정의
-성급한 즉시 보상 대신, 태스크가 완전히 완료(Success)되거나 실패(Evicted/OOM)하는 시점에 해당 배정의 상태-행동 쌍에 보상을 소급 귀속하는 **지연 보상(Delayed Reward Credit Assignment) 경로**를 활성화합니다. ASSIGN(0,1,2) 행동의 지연 보상은 완료 스레드에서 수행하는 반면, 그 외 행동(HOLD, SCALE_OUT 등)은 **`head/q_learning/reward_policy.py` 단일 산출 모듈**을 공유하여 학습 오차를 방지합니다.
+성급한 즉시 보상 대신, 태스크가 완전히 완료(Success)되거나 실패(Evicted/OOM)하는 시점에 해당 배정의 상태-행동 쌍에 보상을 소급 귀속하는 **지연 보상(Delayed Reward Credit Assignment) 경로**를 활성화합니다. ASSIGN(0,1,2) 행동의 지연 보상은 완료 스레드에서 수행하는 반면, 그 외 행동(HOLD, SCALE_OUT 등)은 **`wemeet/learning/reward_policy.py` 단일 산출 모듈**을 공유하여 학습 오차를 방지합니다.
 
 $$Reward = R_{success} - C_{cost} - P_{makespan} - P_{delay} - P_{evicted} + R_{co\text{-}sched}$$
 
@@ -259,7 +261,7 @@ sequenceDiagram
 ```
 
 ### 가. GCS 상태 영속 체크포인팅 (State Persistence)
-*   `head/state.py`의 스레드 안전 함수 `save_gcs_state()` / `load_gcs_state()`로 `data/gcs_state.json`에 상태를 영속화합니다. 
+*   `wemeet/cluster/gcs_state.py`의 스레드 안전 함수 `save_gcs_state()` / `load_gcs_state()`로 `data/gcs_state.json`에 상태를 영속화합니다. 
 *   마스터 재기동 시 데드라인(`deadline`)이 과거 시간으로 고착되는 것을 방지하기 위해 **현재 기동 시간 기준으로 타임아웃을 강제 시프트**하는 보정 로직을 포함합니다.
 
 ### 나. Skip-Execution & 최신 체크포인트 이어서 재개 (Re-execution)
@@ -281,9 +283,17 @@ sequenceDiagram
     *   Spot-A: 60% (Scale 0.6)
     *   Spot-B: 50% (Scale 0.5)
 
-PyTorch 미지원 환경의 CPU 모사 모드(`CPUDummySimulationRunner`)에 한해서만 모델 고유 부하에 맞춰 에포크당 0.02초(CNN), 0.08초(LSTM), 0.05초(RNN)의 시차를 모사합니다.
-*   **OOM 시뮬레이션 동거 경합 모델**:
-    LSTM 및 RNN 태스크는 노드 타입에 따라 기본 OOM 확률(Spot-B 20%, Spot-A 8%, On-Demand 2%)에 더해, **동일 물리 노드 내 동거 중인 메모리 집약형 태스크 개수당 8%씩 가산(최대 60% 상한)**되는 실전적 경합 확률을 모사하여 무분별한 스케줄링을 제어합니다.
+PyTorch 미지원 환경의 CPU 모사 모드(`CPUDummySimulationRunner`, `wemeet/workload/dummy_load.py`)에 한해서만 모델 고유 부하에 맞춰 에포크당 약 0.02초(CNN), 0.08초(LSTM), 0.10초(RNN, 0.05초×2)의 시차를 모사합니다.
+*   **OOM 시뮬레이션 (노드 용량 인지 + 동거 경합 모델)**:
+    확률의 유일 진실은 `wemeet/config/sim_env.yaml`의 `failure.oom` 이며 판정은 `wemeet/simulation/failure_simulator.py`가 담당합니다. 노드 메모리 용량(OD 2GB / Spot-A 1GB / Spot-B 512MB) 대비 모형의 메모리 요구도를 확률로 표현하여, **작은 노드에 큰 모형을 얹는 스케줄링을 처벌**합니다. 모델·노드별 기본 OOM 확률은 다음과 같습니다.
+
+    | 모델 | On-Demand | Spot-A | Spot-B |
+    | :--- | :--- | :--- | :--- |
+    | **LSTM** (메모리 폭식) | 0.01 | 0.15 | **0.85** |
+    | **RNN** (중간/경량) | 0.00 | 0.01 | 0.04 |
+    | **CNN** (연산 바운드) | 0.00 | 0.00 | 0.01 |
+
+    여기에 **동일 노드 동거 중인 메모리바운드 태스크 개수당 +0.10**(`colocation_step`) 가산되며 **상한은 0.90**(`prob_cap`)입니다. (노드 미지정 레거시 경로에서는 LSTM 8% 자연 발생 확률 `legacy_lstm_prob`을 유지합니다.)
 
 ---
 
@@ -293,7 +303,7 @@ PyTorch 미지원 환경의 CPU 모사 모드(`CPUDummySimulationRunner`)에 한
 
 *   **실시간 비용 청구**: 가상 예산 고갈의 위기감을 체감하고 에이전트가 적시 스케일인을 유도하도록 하기 위해, AWS/GCP처럼 **가동 중인 모든 워커 노드의 시간당 요금을 초 단위로 환산하여 스케줄러 핵심 루프의 매 주기(0.2초)마다 가상 예산에서 실시간 차감**합니다.
     $$\text{Virtual Budget Decrement} = \frac{\text{Cost Per Hour}}{3600.0} \times 0.2$$
-*   **정합화 완료**: `scheduler_daemon.py` 의 메인 루프에 실시간 차감 로직이 완전히 정합화 적용되었으며, 대시보드의 예산 표기 및 차감도 실제 초기 가상 예산($1.5 기본값)과 연동하여 동기화 가동 중입니다.
+*   **정합화 완료**: `wemeet/scheduling/daemon.py` 의 메인 루프에 실시간 차감 로직이 완전히 정합화 적용되었으며, 대시보드의 예산 표기 및 차감도 실제 초기 가상 예산($1.5 기본값)과 연동하여 동기화 가동 중입니다.
 
 ---
 
@@ -326,3 +336,19 @@ PyTorch 미지원 환경의 CPU 모사 모드(`CPUDummySimulationRunner`)에 한
 
 현재의 파일 공유 볼륨 기반 통신은 텐서 크기가 커질수록 극심한 디스크 I/O 병목을 초래하므로, 상용 분산 학습 환경(Ray, PyTorch DDP)에서는 공유 메모리(Plasma Object Store) 및 NCCL 기반 P2P 직접 통신(All-Reduce)을 활용합니다.
 P2P 전송 방식은 통신 도중 노드가 탈퇴하거나 유실되었을 때 링 구조가 붕괴되는 치명적인 복잡성을 수반하지만, 이는 Rendezvous 합의 백엔드(etcd 등)를 통해 노드 멤버십 변화를 감지하고 가상 Rank를 실시간 재부팅하는 링 재구성(Re-rendezvous)과 Rank 0 기준의 가중치 Broadcast 강제 동기화 기법을 통해 안정적으로 극복됩니다.
+
+---
+
+## 12. 고속 벤치마크 측정 하네스 (Fast Simulation & Reporting)
+
+실제 docker 클러스터 벤치마크는 에피소드당 수 분이 소요되어 반복 측정이 비현실적이므로, docker 물리(요금·`gpu_scale`·회수/OOM 확률·예산 소진·재시도 캡)를 미러링한 **순수 파이썬 고속 시뮬레이터**로 3대 스케줄러를 신속·재현 가능하게 비교합니다. 시뮬레이터의 모든 수치는 실제 경로와 동일하게 `wemeet/config/sim_env.yaml`을 참조합니다(sim-to-real 정합).
+
+```bash
+python -m wemeet.simulation.benchmark --runs 10 --scenario normal,burst_heavy,low_budget --chart
+```
+
+*   **엔진/하네스 분리**: `wemeet/simulation/fast_sim.py`(`FastSimulator` 엔진) + `wemeet/simulation/benchmark.py`(반복·집계·리포트).
+*   **통계 신뢰성**: 각 모드를 `--runs` 회 시드 변동 반복 실행 → 지표별 **평균 ± 표준편차 / 95% 신뢰구간** 산출(Q-Learning은 학습 1회 → 평가 N회).
+*   **지표 확장**: 성공률·SLA 준수율·처리량·건당 비용에 더해 **연산 p50/p90, 지연 p90, 실패의 OOM/회수 분해, 모델별 성공률, 예산 생존율**.
+*   **시나리오 프리셋**(`sim_env.yaml:scenarios`): `normal`·`burst_heavy`(폭주)·`low_budget`(저예산)·`high_eviction`(고회수)를 오버라이드로 정의해 한 번에 비교.
+*   **발표용 리포트**: 콘솔 비교표 + `data/benchmark_report_<scenario>.md`(핵심 결론 문장 자동 생성). 대표 1회분은 12컬럼 CSV로 저장되어 기존 시각화(`wemeet/observability/reporting_visualize.py`, `--chart`)와 호환됩니다.

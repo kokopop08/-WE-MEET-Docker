@@ -1,5 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "we-meet"
 version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = []
+# Docker head 베이스(python:3.10-slim)와 정합. 로컬도 3.10+ 지원.
+requires-python = ">=3.10"
+dependencies = [
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "psutil>=5.9.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# head 는 torch 불필요. worker(실연산)·시각화용 무거운 의존은 별도 그룹.
+worker = ["torch", "numpy>=1.26.0"]
+viz = ["pandas>=2.0.0", "matplotlib>=3.8.0", "seaborn>=0.13.0"]
+docs = ["pdoc>=14.0"]
+docker = ["docker>=7.0.0"]
+
+[project.scripts]
+wemeet-head = "wemeet.transport.head:serve"
+wemeet-benchmark = "wemeet.simulation.benchmark:main"
+
+# 기능별 패키지 자동 탐색: 최상위 wemeet 우산 패키지 및 그 하위 전체.
+[tool.setuptools.packages.find]
+include = ["wemeet*"]
+
+# 패키지에 포함할 비-파이썬 자원(설정 YAML, 대시보드 정적파일, proto).
+[tool.setuptools.package-data]
+"wemeet.config" = ["*.yaml"]
+"wemeet.observability" = ["web/*"]
+"wemeet.transport.proto" = ["*.proto"]
