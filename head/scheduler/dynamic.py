@@ -1,11 +1,22 @@
 # ==============================================================================
 # WE-MEET: 동적 부하 인지형 스케줄링 모듈 (head/scheduler/dynamic.py)
 #
-# [철학] 인간이 짤 수 있는 최고 수준의 Task↔Node 매칭 하드코딩.
-#   - LSTM(메모리 폭식) -> On-Demand/Spot-A (작은 노드 OOM 회피, Spot-B 금지)
-#   - CNN(무거운 연산)  -> Spot-A 우선 (저속 노드의 회수 룰렛 복리 노출 회피)
-#   - RNN(초경량)       -> Spot-B 우선 (단독 ~5초라 10초 룰렛 회피 + 극가성비)
-#   증설 노드 타입도 큐의 모형 구성에 맞춰 가변 선택한다.
+# [철학] 인간이 짤 수 있는 최고 수준의 Task↔Node 매칭 하드코딩 — '안전 우선(Safety-First)'.
+#
+# [노드 성격 (cost_model.yaml 신물리 기준)]
+#   - on_demand : 최고속(gpu 1.0) · 회수 0% · 고비용        → 안전한 고속 워크호스
+#   - spot_a    : 빠름(gpu 0.6)   · 회수 0.50(고위험) · 중비용 → 이제 '회수 룰렛' 노드(최후수단)
+#   - spot_b    : 저속(gpu 0.5)   · 회수 0.10(안전) · 저비용  · 단, LSTM에 OOM 0.20(금지)
+#
+# [매칭 원칙] Spot-A의 회수가 0.30→0.50으로 올라 '빠르지만 위험'해졌으므로, 회수 낭비를 피하기 위해
+#   안전 노드(OD·Spot-B)를 우선하고 Spot-A는 최후수단으로 미룬다.
+#   - LSTM(메모리 폭식) -> On-Demand 우선, Spot-A 폴백. Spot-B는 OOM(0.20)로 '하드 금지'.
+#   - CNN(무거운 연산)  -> On-Demand 우선(빠르고 안전), Spot-B(안전·저가) 차선, Spot-A 최후.
+#   - RNN(초경량)       -> Spot-B 우선(저가·안전, 경량이라 저속 감내), OD 차선, Spot-A 최후.
+#   증설 타입도 안전 우선: 기본 Spot-B(안전·저가), 단 LSTM이 큐에 있으면 Spot-A(LSTM은 Spot-B 금지라).
+#
+# [보류 완화] 선호 노드가 다 바빠도 '하드 금지가 아닌 유휴 노드'가 있으면 즉시 배정한다(선호 순서는 유지).
+#   선호 노드가 빌 때까지 대기하다 큐가 적체되어 마감을 놓치던 문제를 제거한다.
 # ==============================================================================
 
 import time
@@ -14,12 +25,18 @@ import head.state as gcs_state
 import head.cluster_manager as cluster_manager
 import head.dashboard.server as dashboard
 
-# 모델별 선호 노드 타입 순서 (앞쪽일수록 우선). LSTM은 Spot-B를 아예 후보에서 제외(OOM·저속 회피).
+# 모델별 선호 노드 타입 순서 (앞쪽일수록 우선). 안전 우선: Spot-A(회수 0.50)는 어느 모델에서도 최후순위.
 MODEL_NODE_PREFERENCE = {
-    "LSTM": ["on_demand", "spot_a"],
-    "CNN":  ["spot_a", "on_demand", "spot_b"],
-    "RNN":  ["spot_b", "spot_a", "on_demand"],
-    "MERGE": ["on_demand", "spot_a", "spot_b"],
+    "LSTM": ["on_demand", "spot_a"],            # Spot-B는 OOM으로 하드 금지(MODEL_FORBIDDEN)
+    "CNN":  ["on_demand", "spot_b", "spot_a"],  # OD우선(안전·고속), Spot-B차선(안전), Spot-A최후(위험)
+    "RNN":  ["spot_b", "on_demand", "spot_a"],  # Spot-B우선(저가·안전), OD차선, Spot-A최후
+    "MERGE": ["on_demand", "spot_a", "spot_b"], # 병합은 OD 우선
+}
+
+# 모델별 '하드 금지' 노드 — 보류 완화(폴백)로도 절대 배정하지 않는다.
+# LSTM은 Spot-B(512MB)에서 OOM 확률 0.20으로 높아 금지한다.
+MODEL_FORBIDDEN = {
+    "LSTM": {"spot_b"},
 }
 
 def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
@@ -39,7 +56,6 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
         with gcs_state.queue_lock:
             q_len_real = len(gcs_state.task_queue)
             has_lstm = any(t.get("model_type") == "LSTM" for t in gcs_state.task_queue)
-            has_cnn = any(t.get("model_type") == "CNN" for t in gcs_state.task_queue)
 
         if active_workers:
             avg_cpu = sum(info.get("cpu", 0.0) for info in active_workers) / len(active_workers)
@@ -47,8 +63,9 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
         else:
             avg_cpu, avg_mem = 0.0, 0.0
 
-        # 증설 타입 결정: 무거운 모형(LSTM/CNN)이 큐에 있으면 빠른 Spot-A, RNN 위주면 저가 Spot-B.
-        target_type = "spot_a" if (has_lstm or has_cnn) else "spot_b"
+        # 증설 타입 결정(안전 우선): 기본은 안전·저가 Spot-B. 단, LSTM이 큐에 있으면 Spot-A를 증설한다
+        # (LSTM은 Spot-B가 OOM 금지라 갈 곳이 OD/Spot-A뿐이므로, 부족한 Spot-A 용량을 보강).
+        target_type = "spot_a" if has_lstm else "spot_b"
 
         if q_len_real >= 8 and spot_scale < MAX_SPOT_SCALE - 1:
             dashboard.log_event(f"[Dynamic Scale-Out] 대기 큐 심각 적체({q_len_real}개) -> Spot-{target_type[-1].upper()} 노드 2대 동시 증설")
@@ -84,7 +101,8 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
             break
 
         model = str(target_task.get("model_type", "CNN")).upper()
-        pref = MODEL_NODE_PREFERENCE.get(model, ["spot_a", "on_demand", "spot_b"])
+        pref = MODEL_NODE_PREFERENCE.get(model, ["on_demand", "spot_b", "spot_a"])
+        forbidden = MODEL_FORBIDDEN.get(model, set())
 
         selected_worker_id = None
         selected_worker_info = None
@@ -100,11 +118,13 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
                 if cpu_val >= 80.0 or mem_val >= 75.0:
                     continue
                 ntype = info["node_type"]
-                if ntype not in pref:
-                    # 선호 타입이 아니면 배제 (예: LSTM에 대한 Spot-B는 후보에서 제외되어 OOM 회피)
+                # 하드 금지 노드는 폴백으로도 절대 배정하지 않는다 (예: LSTM->Spot-B OOM).
+                if ntype in forbidden:
                     continue
-                # (선호순위, least-loaded) 순으로 정렬하기 위한 키
-                candidates.append((pref.index(ntype), cpu_val * 0.5 + mem_val * 0.5, wid, info))
+                # 정렬 1순위 = 선호 순위(선호 목록에 없으면 맨 뒤로 밀어 '폴백'으로만 쓰임),
+                #        2순위 = least-loaded. → 선호 노드가 유휴면 그걸, 아니면 금지 아닌 유휴 노드에 즉시 배정(보류 완화).
+                rank = pref.index(ntype) if ntype in pref else len(pref)
+                candidates.append((rank, cpu_val * 0.5 + mem_val * 0.5, wid, info))
 
             if candidates:
                 candidates.sort(key=lambda x: (x[0], x[1]))
@@ -118,11 +138,12 @@ def run_dynamic_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worke
                 daemon=True
             ).start()
         else:
-            # 선호 노드가 포화/부재 시 스팸 방지 로그 후 백필링(보류)
+            # 보류 완화 적용 후에도 배정 못 함 = 배정 가능한 유휴 노드가 전무(모두 BUSY/과부하이거나
+            # 남은 유휴가 하드 금지 노드뿐). 이 경우에만 백필링(보류). 스팸 방지 로그.
             cur_time = time.time()
             last_log = getattr(run_dynamic_scheduler_step, "_last_log_time", 0.0)
             if cur_time - last_log >= 5.0:
-                dashboard.log_event(f"[Dynamic Staggered] Task-Aware 매칭 보류: {target_task['task_id']}({model}) 선호 노드 미가용으로 지연 (대기 중)")
+                dashboard.log_event(f"[Dynamic Staggered] 배정 보류: {target_task['task_id']}({model}) 가용 유휴 노드 없음 -> 증설/완료 대기 (대기 중)")
                 run_dynamic_scheduler_step._last_log_time = cur_time
             deferred_tasks.append(target_task)
 

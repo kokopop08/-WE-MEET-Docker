@@ -16,3 +16,11 @@ env/
 babyray_api_docs.html
 어려움 정리/
 
+# data/ 런타임 산출물(벤치 결과·Q테이블·차트·체크포인트·상태)은 버전관리 제외
+data/*.csv
+data/*.png
+data/*.pt
+data/*.json
+data/*.bak*
+data/*.warmstart*
+
