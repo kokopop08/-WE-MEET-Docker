@@ -1,4 +1,16 @@
 import os
+import sys
+
+# 1) script_dir(wemeet/observability/)가 sys.path에 있으므로, standard library 'logging' 모듈 섀도잉 방지를 위해 제거
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+while _script_dir in sys.path:
+    sys.path.remove(_script_dir)
+
+# 2) 프로젝트 루트 디렉토리를 path 최상위에 추가하여 wemeet 패키지 임포트 지원
+_project_root = os.path.abspath(os.path.join(_script_dir, '../..'))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 import pandas as pd
 
 def analyze_file(csv_path, mode_name):

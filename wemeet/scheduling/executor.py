@@ -15,7 +15,7 @@ builtins.print = print
 
 # GCS 전역 인메모리 스토어 상태 임포트
 import wemeet.cluster.gcs_state as gcs_state
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 from wemeet.transport.proto import babyray_pb2
 from wemeet.transport.proto import babyray_pb2_grpc
 from wemeet.learning.agent import QLearningAgent

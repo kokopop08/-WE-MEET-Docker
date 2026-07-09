@@ -8,7 +8,7 @@ import random
 
 # 공유 상태 및 대시보드 모듈 임포트
 import wemeet.cluster.gcs_state as state # state = 시스템의 전역 변수를 가지고 있음
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 from wemeet.cluster.resource_guard import get_gpu_free_memory, is_host_resource_sufficient
 from wemeet.simulation.failure_simulator import FailureSimulator # 장애 시뮬레이션 판단 로직 중앙화 모듈
 from wemeet.config import env_config as _ec  # 요금/회수확률 유일 진실

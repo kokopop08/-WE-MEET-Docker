@@ -5,6 +5,8 @@ import time
 import yaml
 from datetime import datetime, timedelta
 
+# 프로젝트 루트 디렉토리를 path에 추가하여 wemeet 패키지 임포트 지원
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from wemeet.simulation.failure_simulator import FailureSimulator
 from wemeet.config import env_config as _ec

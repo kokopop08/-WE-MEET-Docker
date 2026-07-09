@@ -33,6 +33,8 @@ import os
 import sys
 import random
 
+# 프로젝트 루트 디렉토리를 path에 추가하여 wemeet 패키지 임포트 지원
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from wemeet.learning.agent import QLearningAgent
 import wemeet.learning.state_features as state_features

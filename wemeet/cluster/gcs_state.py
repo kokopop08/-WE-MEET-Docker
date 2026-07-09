@@ -59,11 +59,17 @@ DOCKER_CLIENT = None # Docker API 서버와 통신, 컨테이너 관리
 
 try:
     import docker
+    # 오프라인/시뮬레이션 환경에서는 Docker SDK가 설치돼 있지 않거나(=이 경우 import 된 docker 는
+    # 프로젝트 루트의 docker/ 디렉토리 네임스페이스라 from_env 가 없음), 데몬이 없다. 이때는
+    # 컨테이너 제어 없이 순수 시뮬레이션으로 도는 '안전 모드'가 정상 동작이다(에러 아님).
+    if not hasattr(docker, "from_env"):
+        raise RuntimeError("Docker SDK 미설치(시뮬레이션/오프라인 환경)")
     DOCKER_CLIENT = docker.from_env()
     print("[Docker SDK] 호스트 도커 데몬 연결 성공.")
 except Exception as e:
     DOCKER_CLIENT = None
-    print(f"[Docker SDK 경고] 도커 데몬 연결 실패 (예외 안전 모드 가동): {e}")
+    # 벤치마크/오프라인 학습에서는 Docker 가 필요 없으므로 정상 흐름이다. (실 배포 시에만 실제 연결)
+    print(f"[Docker SDK] 안전 모드로 기동 (컨테이너 제어 비활성, 시뮬레이션에서는 정상): {e}")
 
 # --- GCS 상태 영속 저장 및 복구 함수 ---
 import json

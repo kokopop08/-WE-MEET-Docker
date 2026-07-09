@@ -10,7 +10,7 @@ import time
 import threading
 import wemeet.cluster.gcs_state as gcs_state
 import wemeet.cluster.manager as cluster_manager
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 
 def run_static_scheduler_step(MAX_SPOT_SCALE, scale_in_timer, run_task_on_worker, get_next_runnable_task, get_current_spot_scale, run_scale_decisions=False):
     """

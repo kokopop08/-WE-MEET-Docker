@@ -1,4 +1,4 @@
-"""전역 이벤트 로그 채널 (wemeet/observability/logging.py).
+"""전역 이벤트 로그 채널 (wemeet/observability/event_log.py).
 
 그동안 ``log_event`` 가 대시보드 모듈 안에 정의되어 있어, 스케줄러·클러스터 등
 관측(observability)과 무관한 모듈들이 로그 한 줄을 남기려고 대시보드 모듈에 역결합되어

@@ -22,7 +22,7 @@ import time
 import threading
 import wemeet.cluster.gcs_state as gcs_state
 import wemeet.cluster.manager as cluster_manager
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 from wemeet.config import env_config as _ec
 
 # 스케줄러 정책 값의 유일 진실: sim_env.yaml scheduler_policy (env_config).

@@ -1,6 +1,10 @@
-import grpc
-import sys
 import os
+import sys
+
+# 프로젝트 루트 디렉토리를 path에 추가하여 wemeet 패키지 임포트 지원
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+import grpc
 import socket
 import psutil
 import time

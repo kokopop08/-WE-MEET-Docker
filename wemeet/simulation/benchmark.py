@@ -8,6 +8,11 @@ p50/p90·OOM/회수 분해 지표를 산출하고, 시나리오별 콘솔 비교
 """
 
 import os
+import sys
+
+# 프로젝트 루트 디렉토리를 path에 추가하여 wemeet 패키지 임포트 지원
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
 from wemeet.simulation.fast_sim import FastSimulator, DATA_DIR, _WL, _ET  # noqa: F401
 from wemeet.learning.agent import QLearningAgent
 from wemeet.config import env_config as _ec

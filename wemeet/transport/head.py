@@ -1,11 +1,15 @@
 """WE-MEET: Head Node gRPC 서버 메인 컨트롤러 (head/head.py)
 """
 
-import grpc
-from concurrent import futures # 비동기 작업 / 스테드 풀 관리
-import time
 import os
-import sys # 모듈 검색 경로 조작 sys
+import sys
+
+# 프로젝트 루트 디렉토리를 path에 추가하여 wemeet 패키지 임포트 지원
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+import grpc
+from concurrent import futures
+import time
 import psutil
 import threading
 import signal

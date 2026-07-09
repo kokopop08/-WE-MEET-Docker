@@ -22,7 +22,7 @@ from wemeet.config import env_config as _ec
 # state 모듈을 gcs_state라는 별칭으로 임포트하여 로컬 변수 state와 충돌하지 않게 함
 import wemeet.cluster.gcs_state as gcs_state # gcs state (변수, 인메모리 캐시 모음), q-learning state와의 차별을 두기 위해서
 import wemeet.cluster.manager as cluster_manager
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 
 from wemeet.scheduling.static import run_static_scheduler_step
 from wemeet.scheduling.dynamic import run_dynamic_scheduler_step

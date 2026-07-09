@@ -3,18 +3,17 @@
 ``web/`` 정적 파일(index.html·style.css·app.js)을 서빙하고, ``/api/status`` 로 GCS 상태
 스냅샷+이벤트 로그를 JSON 제공하며, ``/api/reset`` 으로 GCS 상태를 초기화한다.
 
-이벤트 로그 채널 자체는 [wemeet.observability.logging] 이 소유한다. 하위호환을 위해
+이벤트 로그 채널 자체는 [wemeet.observability.event_log] 이 소유한다. 하위호환을 위해
 ``log_event``/``event_logs``/``event_lock`` 을 여기서 재-export 한다(기존 ``dashboard.log_event``
-호출부가 그대로 동작). 신규 코드는 logging 모듈을 직접 참조하는 것을 권장한다.
+호출부가 그대로 동작). 신규 코드는 event_log 모듈을 직접 참조하는 것을 권장한다.
 """
-
+import os
 import http.server
 import json
 import threading
-import os
 
-# 로그 채널은 logging 모듈이 소유. 하위호환 재-export.
-from wemeet.observability.logging import log_event, event_logs, event_lock  # noqa: F401
+# 로그 채널은 event_log 모듈이 소유. 하위호환 재-export.
+from wemeet.observability.event_log import log_event, event_logs, event_lock  # noqa: F401
 
 # 대시보드 상태 데이터 획득을 위한 콜백 함수 (transport/head.py 에서 바인딩)
 _data_callback = None

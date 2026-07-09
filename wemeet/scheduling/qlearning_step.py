@@ -5,7 +5,7 @@ import time
 import threading
 import wemeet.cluster.gcs_state as gcs_state
 import wemeet.cluster.manager as cluster_manager
-from wemeet.observability import logging as _obslog
+from wemeet.observability import event_log as _obslog
 import wemeet.learning.state_features as state_features
 import wemeet.learning.reward_policy as reward_policy
 
