@@ -85,8 +85,13 @@ def _mode_env(mode, budget, keep_training):
     env["EXPERIMENT_AUTOEXIT"] = "1"  # 예산 소진 시 head 자동 종료 → --exit-code-from 으로 전체 down
     # q_learning 은 기본 추론 모드(탐험 노이즈 배제). --keep-training 시에만 온라인 학습.
     env["Q_LEARNING_TRAINING_MODE"] = "true" if (mode == "q_learning" and keep_training) else "false"
-    if budget is not None:
-        env["INITIAL_VIRTUAL_BUDGET"] = str(budget)
+    # --budget 을 생략해도 셸/부모 프로세스에 남은 INITIAL_VIRTUAL_BUDGET(예: 이전 실행의 10) 이
+    # 컨테이너로 새어 들어가지 않도록, 항상 명시적으로 설정한다. 생략 시 기본값은 sim_env.yaml 의
+    # budget.initial_virtual_budget( = 1.5 )이다.
+    if budget is None:
+        from wemeet.config import env_config as _ec
+        budget = _ec.budget()["initial_virtual_budget"]
+    env["INITIAL_VIRTUAL_BUDGET"] = str(budget)
     return env
 
 

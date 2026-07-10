@@ -355,7 +355,7 @@ class SimulatedEnvironment:
                                  "remaining": 0.0, "exec_time": 0.0, "s": None, "a": None}
             scaled += 1
 
-        reward = reward_policy.scale_reward(action, urgent, cost_level, scale_success=(scaled > 0))
+        reward = reward_policy.scale_reward(action, urgent, cost_level, scale_success=(scaled > 0), queue_backlog=(len(self.task_queue) >= 3))
         self.agent.update_q_value(state, action, reward, self._get_state())
 
     def _scale_in_one_spot(self):

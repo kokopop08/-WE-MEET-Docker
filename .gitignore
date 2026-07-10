@@ -23,4 +23,5 @@ data/*.pt
 data/*.json
 data/*.bak*
 data/*.warmstart*
+data/
 

@@ -345,9 +345,11 @@ class FastSimulator:
                 available_actions.append(2)
                 
             spot_scale = self.get_current_spot_scale()
-            has_launching = any(w.status == "BOOTING" for w in self.workers.values())
-            
-            if spot_scale < MAX_SPOT_SCALE and not has_launching:
+            # 콜드스타트 플래핑은 막되 램프업 속도는 확보: '부팅 중 0대'가 아니라 '2대 미만'까지 증설 허용.
+            # (과거 not has_launching 은 8초에 1대씩만 늘려 초기 백로그→지연 폭발을 유발. Static/Dynamic 은 2대씩 증설.)
+            num_booting = sum(1 for w in self.workers.values() if w.status == "BOOTING")
+
+            if spot_scale < MAX_SPOT_SCALE and num_booting < 2:
                 available_actions.append(4)  # SCALE_OUT_SPOT_A
                 available_actions.append(5)  # SCALE_OUT_SPOT_B
                 
@@ -418,14 +420,50 @@ class FastSimulator:
             elif action in [4, 5]:  # SCALE_OUT
                 target_type = "spot_a" if action == 4 else "spot_b"
                 scale_success = self.scale_out_worker(target_type)
-                
+                # 심각 적체(q_len>=6) 시 2대 동시 증설 — 실제 경로(qlearning_step)와 동일한 램프업.
+                if len(self.task_queue) >= 6 and self.get_current_spot_scale() < MAX_SPOT_SCALE:
+                    self.scale_out_worker(target_type)
+
                 if self.q_learning_training:
                     cost_level = 1 if (BUDGET_LIMIT - self.virtual_budget) > state_features.COST_LEVEL_THRESHOLD else 0
-                    reward = reward_policy.scale_reward(action, urgent=is_urgent, cost_level=cost_level, scale_success=scale_success)
+                    reward = reward_policy.scale_reward(action, urgent=is_urgent, cost_level=cost_level, scale_success=scale_success, queue_backlog=(len(self.task_queue) >= 3))
                     next_state = self.get_current_state_key()
                     self.q_agent.update_q_value(state, action, reward, next_state)
                     self.q_agent.save_q_table()
                 break  # 증설 가동 대기 위해 이번 틱 루프 탈출
+
+        # [그리디 백필] RL 루프가 SCALE/HOLD break 등으로 끝난 뒤에도, 유휴 워커가 있고 배정 가능한
+        # 대기 태스크가 남아 있으면 유휴 용량을 놀리지 않도록 선호 순서로 즉시 배정한다.
+        # (틱마다 액션 1개→break 로 유휴 워커를 남긴 채 큐가 쌓이던 처리량 붕괴 교정. LSTM은 spot_b 금지 유지.)
+        _order = {"on_demand": 0, "spot_a": 1, "spot_b": 2}
+        while self.task_queue:
+            idle_workers = sorted(
+                [w for w in self.workers.values() if w.status == "IDLE"],
+                key=lambda w: _order.get(w.node_type, 9)
+            )
+            if not idle_workers:
+                break
+            progressed = False
+            for w in idle_workers:
+                chosen_idx = None
+                for idx, t in enumerate(self.task_queue):
+                    if w.node_type == "spot_b" and t["model_type"] == "LSTM":
+                        continue  # LSTM 은 Spot-B 금지
+                    chosen_idx = idx
+                    break
+                if chosen_idx is None:
+                    continue  # 이 워커가 처리 가능한 태스크가 큐에 없음
+                bf_state = self.get_current_state_key()
+                bf_task = self.task_queue.pop(chosen_idx)
+                self.assign_task_to_worker(bf_task, w)
+                # 지연 보상 바인딩(완료/회수 시 calculate_reward 로 (state, action)에 귀속)
+                self.running_tasks[bf_task["task_id"]] = {
+                    "state": bf_state,
+                    "action": {"on_demand": 0, "spot_a": 1, "spot_b": 2}[w.node_type]
+                }
+                progressed = True
+            if not progressed:
+                break
 
     def assign_task_to_worker(self, task, worker):
         worker.status = "BUSY"

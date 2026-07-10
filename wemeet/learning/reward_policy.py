@@ -44,25 +44,32 @@ def hold_reward(q_len, overdue_seconds_list, delay_penalty_weight):
     return 1.0 - 0.5 * q_len - hold_penalty
 
 
-def scale_reward(action, urgent, cost_level, scale_success):
+def scale_reward(action, urgent, cost_level, scale_success, queue_backlog=False):
     """
     SCALE_OUT 행동(4=Spot-A 증설, 5=Spot-B 증설)의 즉시 보상.
 
-    증설은 그 자체로 요금 부담(감점)이지만, 마감이 임박(urgent)했고 아직 총요금이 낮은(cost_level=0)
-    국면이면 빠른 Spot-A 증설을 양(+)으로 보상한다 → "필요할 때 증설"을 학습. 반대로 고비용 국면
-    (cost_level=1: 총 시간당요금 > $9)에서는 추가 증설을 강하게 감점한다. 증설 실패(물리 자원 부족
-    또는 OutOfCapacity)는 강한 벌점(-10).
+    증설은 요금 부담이지만, **마감 임박(urgent)이거나 대기열이 적체(queue_backlog)된** 국면이면
+    선제 증설을 양(+)으로 보상한다 → "수요에 앞서 provision"을 학습. 고비용 국면(cost_level=1:
+    총 시간당요금 > $9)에서는 예산 보호를 위해 강하게 감점한다. 증설 실패(자원 부족/OutOfCapacity) -10.
 
-    수식(head/scheduler/q_learning.py의 온라인 학습 블록과 완전히 동일):
-        action 4 (Spot-A): success → (4.0 if urgent else -1.5) - 3.5,  cost_level=1 이면 -3.0 else +3.0
-        action 5 (Spot-B): success → (1.0 if urgent else  0.0) - 2.0,  cost_level=1 이면 -2.0 else +1.0
-        실패(둘 다)       → -10.0
+    [2026-07-10 재설계] 과거엔 'urgent(head<=10s)'일 때만 증설을 양수화 → 큐가 쌓여도 선두가
+    임박 전이면 증설이 음수(-2.0)라 **반응적 과소provision → 느린 램프업 → 지연 폭발**을 유발했다.
+    Static/Dynamic 이 q_len>=2 에 선제 증설하는 것과 대칭이 되도록 queue_backlog 신호를 추가한다.
+    (동반 수정: 스케줄러 그리디 백필로 '유휴 워커 방치' 버그를 제거해, 선제 증설이 배정을 막지 않음.)
+
+    수식(success 시):
+        provision_needed = urgent or queue_backlog
+        action 4 (Spot-A, 성능·회수위험): base = 3.0(urgent) / 1.0(backlog) / -2.0(그 외)
+        action 5 (Spot-B, 저가·안정)     : base = 2.5(provision_needed) / -1.0(그 외)
+        공통                              : base += (-3.0 if cost_level==1 else +1.0)
+    실패(둘 다) → -10.0
 
     Args:
         action (int): 4(Spot-A 증설) 또는 5(Spot-B 증설).
         urgent (bool): 선두 태스크 마감 임박(<=10s) 여부.
         cost_level (int): 고비용 국면 여부(1=총 시간당요금>$9, 0=그 외).
         scale_success (bool): 증설 성공 여부.
+        queue_backlog (bool): 대기열 적체 여부(호출자에서 q_len>=임계로 산출). 선제 증설 유도용.
 
     Returns:
         float: SCALE 보상.
@@ -71,17 +78,16 @@ def scale_reward(action, urgent, cost_level, scale_success):
         # 물리적 자원 부족 또는 OutOfCapacity 가동 실패 → 강한 페널티
         return -10.0
 
-    if action == 4:  # Spot-A 증설 (성능 지향)
-        reward = (4.0 if urgent else -1.5) - 3.5
-        reward += -3.0 if cost_level == 1 else 3.0
-        return reward
-    elif action == 5:  # Spot-B 증설 (저가 안정)
-        reward = (1.0 if urgent else 0.0) - 2.0
-        reward += -2.0 if cost_level == 1 else 1.0
-        return reward
+    if action == 4:  # Spot-A 증설 (성능 지향, 회수 위험 큼) — 긴급 시 우대
+        base = 3.0 if urgent else (1.0 if queue_backlog else -2.0)
+    elif action == 5:  # Spot-B 증설 (저가·안정) — 선제 증설의 기본 수단
+        base = 2.5 if (urgent or queue_backlog) else -1.0
+    else:
+        # 정의되지 않은 액션 — 방어적 폴백(정상 경로에서는 도달하지 않음)
+        return 0.0
 
-    # 정의되지 않은 액션 — 방어적 폴백(정상 경로에서는 도달하지 않음)
-    return 0.0
+    base += -3.0 if cost_level == 1 else 1.0  # 고비용 국면 억제 / 저비용 소폭 보너스
+    return base
 
 
 def impossible_assign_reward():

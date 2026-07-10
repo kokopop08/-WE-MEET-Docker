@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚡ WE-MEET
+# ⚡ WE-MEET: 클라우드 Docker 실증과 스케줄러 개발
 
 ### Docker 기반 이기종 ML 분산 학습 제어 엔진
 

@@ -193,7 +193,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 # SCALE 보상은 reward_policy(유일 진실)에 위임 — 시뮬레이터와 동일 수식 보장.
-                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success)
+                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success, queue_backlog=(q_len_real >= 3))
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()
@@ -222,7 +222,7 @@ def run_qlearning_scheduler_step(MAX_SPOT_SCALE, empty_queue_duration, agent, ru
                     
             if gcs_state.Q_LEARNING_TRAINING_MODE:
                 # SCALE 보상은 reward_policy(유일 진실)에 위임 — 시뮬레이터와 동일 수식 보장.
-                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success)
+                reward = reward_policy.scale_reward(action, urgent=(u_sla == 1), cost_level=c_level, scale_success=scale_success, queue_backlog=(q_len_real >= 3))
                 next_state = _calculate_next_state()
                 agent.update_q_value(state, action, reward, next_state)
                 agent.save_q_table()
